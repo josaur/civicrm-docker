@@ -1,9 +1,53 @@
 #!/bin/sh
 
 set -e
+# DB_CONFIG
+CIVICRM_DB_USER=${CIVICRM_DB_USER:-"civicrm"}
+CIVICRM_DB_NAME=${CIVICRM_DB_NAME:-"civicrm"}
+CIVICRM_DB_PORT=${CIVICRM_DB_PORT:-"3306"}
+CIVICRM_DB_PASSWORD=${CIVICRM_DB_PASSWORD:-"civicrm"}
+CIVICRM_DB_HOST=${CIVICRM_DB_HOST:-"localhost"}
 
-# TODO: run the installer if we are not installed and CIVICRM_AUTO_INSTALL=1
-# TODO: run the upgrade if required and CIVICRM_AUTO_UPDATE=1
+# civi
+CIVICRM_ADMIN_USER=${CIVICRM_ADMIN_USER:-"admin"}
+CIVICRM_ADMIN_PASS=${CIVICRM_ADMIN_PASS:-"admin"}
+CIVICRM_UF_BASEURL=${CIVICRM_UF_BASEURL:-"example.com"}
 
+# Config
+CIVICRM_AUTO_INSTALL=${CIVICRM_AUTO_INSTALL:-"true"}
+CIVICRM_AUTO_UPDATE=${CIVICRM_AUTO_UPDATE:-"true"}
+
+
+
+
+
+if [ -f "/var/www/html/private/civicrm.settings.php" ]
+then
+    echo 'civi already installed nothing to do'
+elif ["$CIVICRM_AUTO_INSTALL" = "false" ] 
+then
+    echo 'If you want to autoinstall civicrm set CIVICRM_AUTO_INSTALL == 1'
+else
+    echo 'start installing civicrm'
+    cv core:install \
+    --db=mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME} \
+    --url=${CIVICRM_UF_BASEURL} \
+    -m extras.adminUser=${CIVICRM_ADMIN_USER} \
+    -m extras.adminPass=${CIVICRM_ADMIN_PASS}
+fi
+
+if ["$CIVICRM_AUTO_UPDATE" != "false"]; then
+   echo 'upgrading database'
+   cv upgrade:db
+   cv ext:upgrade-db
+fi
+
+
+
+
+echo 'changing file permissions'
+chown -R www-data:www-data /var/www/html/*
+
+echo 'starting civicrm'
 exec docker-php-entrypoint "$@"
 
