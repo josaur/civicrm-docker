@@ -36,6 +36,14 @@ else
     -m extras.adminPass=${CIVICRM_ADMIN_PASS}
 fi
 
+# installing extensions
+echo 'install extensions'
+for i in "${EXTENSIONS}" ; do
+    echo 'install extension $i'
+    cv dl "$i"
+done
+
+
 if ["$CIVICRM_AUTO_UPDATE" != "false"]; then
    echo 'upgrading database'
    cv upgrade:db
