@@ -38,7 +38,7 @@ fi
 
 # installing extensions
 echo 'install extensions'
-EXTENSIONS_ARRAY='; ' read -r -a array <<< "$EXTENSIONS"
+read -r -a EXTENSIONS_ARRAY <<< "$EXTENSIONS"
 for i in "${EXTENSIONS_ARRAY}" ; do
     echo 'install extension $i'
     cv dl "$i"
