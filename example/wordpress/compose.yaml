@@ -1,0 +1,42 @@
+services:
+  app:
+    hostname: example
+    image: civicrm/wordpress:latest
+    ports:
+      - 8760:80 # CiviCRM will be available on port 8760.
+    restart: unless-stopped
+    volumes:
+      - uploads:/var/www/html/wp-content/uploads
+      - private:/var/www/private
+    environment:
+      # CIVICRM_DSN: mysql://civicrm:${MYSQL_PASSWORD}@db:3306/civicrm # Note: you can also pass database credentials as a DSN.
+      CIVICRM_DB_HOST: db
+      CIVICRM_DB_PORT: 3306
+      CIVICRM_DB_NAME: civicrm
+      CIVICRM_DB_USER: civicrm
+      CIVICRM_DB_PASSWORD: ${MYSQL_PASSWORD}
+      CIVICRM_UF_BASEURL: http://localhost:8760
+      WORDPRESS_CONFIG_FILE: /var/www/private/wp-config.php
+      WORDPRESS_DB_HOST: db
+      WORDPRESS_DB_NAME: civicrm
+      WORDPRESS_DB_USER: civicrm
+      WORDPRESS_DB_PASSWORD: ${MYSQL_PASSWORD}
+      WORDPRESS_SITE_TITLE: example-site
+      CIVICRM_ADMIN_USER: ${CIVICRM_ADMIN_USER}
+      CIVICRM_ADMIN_PASS: ${CIVICRM_ADMIN_PASS}
+      CIVICRM_ADMIN_EMAIL: ${CIVICRM_ADMIN_EMAIL}
+  db:
+    hostname: db
+    image: mariadb:10.11
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      MYSQL_DATABASE: civicrm
+      MYSQL_USER: civicrm
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+volumes:
+  uploads:
+  private:
+  db:

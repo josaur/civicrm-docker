@@ -1,28 +1,40 @@
-# Published image: civicrm/civicrm
+# Published image: civicrm/civicrm-wordpress
 #
-# This is a ready to use CiviCRM standalone image.
+# This is a ready to use CiviCRM on WordPress image.
 
 ARG PHP_VERSION
 
 ARG IMAGE_PREFIX=civicrm
 
-FROM ${IMAGE_PREFIX}/civicrm-base:php${PHP_VERSION} AS build
+FROM ${IMAGE_PREFIX}/wordpress-base:php${PHP_VERSION} AS build
+
+# Specify a WordPress version
+
+ARG WORDPRESS_VERSION
+
+# Download WordPress
+
+RUN php -d memory_limit=-1 /usr/local/bin/wp core download --version=${WORDPRESS_VERSION} --allow-root
+
+# Create standard directories
+
+RUN mkdir wp-content/languages wp-content/uploads
 
 # Specify a CiviCRM version
 
-ARG CIVICRM_VERSION="6.1.0"
+ARG CIVICRM_VERSION
 
 # Specify a tarball URL to download (overrides CIVICRM_VERSION)
 
-ARG CIVICRM_DOWNLOAD_URL="https://download.civicrm.org/civicrm-${CIVICRM_VERSION}-standalone.tar.gz"
+ARG CIVICRM_DOWNLOAD_URL="https://download.civicrm.org/civicrm-${CIVICRM_VERSION}-wordpress.zip"
 
-# Download the tarball
+# Download the CiviCRM tarball
 
-RUN curl --fail --location ${CIVICRM_DOWNLOAD_URL} --output civicrm-standalone.tar.gz \
-    && tar -xf civicrm-standalone.tar.gz \
-    && rm civicrm-standalone.tar.gz
+RUN curl --fail --location ${CIVICRM_DOWNLOAD_URL} --output /tmp/civicrm-wordpress.zip \
+    && unzip /tmp/civicrm-wordpress.zip -d /var/www/html/wp-content/plugins \
+    && rm /tmp/civicrm-wordpress.zip
 
-FROM ${IMAGE_PREFIX}/civicrm-base:php${PHP_VERSION}
+FROM ${IMAGE_PREFIX}/wordpress-base:php${PHP_VERSION}
 
 # Use the default production PHP configuration
 
@@ -38,7 +50,11 @@ RUN echo 'memory_limit = -1\n' >> $PHP_INI_DIR/php-cli.ini
 
 # Copy the downloaded tarball to /var/www/html as the www-data user
 
-COPY --from=build  --chown=www-data:www-data /var/www/html/civicrm-standalone /var/www/html
+COPY --from=build  --chown=www-data:www-data /var/www/html /var/www/html
+
+# Add custom WordPress config file
+
+COPY --chown=www-data:www-data wp-config.php /var/www/html
 
 # Add our own entrypoint
 
@@ -48,7 +64,7 @@ COPY civicrm-docker-entrypoint /usr/local/bin/
 
 COPY civicrm-docker-install /usr/local/bin/
 
-ENV CIVICRM_UF=Standalone
+ENV CIVICRM_UF=WordPress
 
 # Allow Apache port to be configurable
 

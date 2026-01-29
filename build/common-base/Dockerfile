@@ -24,6 +24,8 @@ FROM php:${PHP_VERSION}-apache-bookworm
 # libicu is required for the PHP intl extension
 # libzip-dev is required for the PHP zip extension
 # libpng-dev is required for the PHP gd extension
+# imagemagick, libmagickwand-dev are required for PHP imagick extension
+# mariadb-client is required for cv cli
 
 RUN set -eux; \
     apt-get update && \
@@ -31,6 +33,9 @@ RUN set -eux; \
     libicu-dev \
     libpng-dev \
     libzip-dev \
+    imagemagick \
+    libmagickwand-dev \
+    mariadb-client \
     && \
     rm -rf /var/lib/apt/lists/*
 
@@ -41,11 +46,17 @@ RUN set -eux; \
 # Tip: you can check what extensions have been installed with:
 # `php -r 'echo implode("\n",get_loaded_extensions());'`.
 
+# imagick is required for eg. Mosaico
+RUN set -eux && \
+    pecl install imagick && \
+    docker-php-ext-enable imagick
+
 RUN set -eux && \
     docker-php-ext-install bcmath && \
     docker-php-ext-install gd && \
     docker-php-ext-install intl && \
     docker-php-ext-install mysqli && \
+    docker-php-ext-install pdo_mysql && \
     docker-php-ext-install zip
 
 # Download cv (https://github.com/civicrm/cv)
@@ -68,5 +79,9 @@ COPY apache-sites-available-default.conf /etc/apache2/sites-available/000-defaul
 # Enable CiviCRM specific configuration
 
 RUN a2enconf civicrm
+
+# Add CiviCRM specific PHP configuration
+
+COPY php-conf-civicrm.ini ${PHP_INI_DIR}/conf.d/civicrm.ini
 
 RUN chown www-data:www-data /var/www
