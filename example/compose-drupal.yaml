@@ -1,0 +1,68 @@
+services:
+  app:
+    hostname: example
+    build:
+      context: ../build/civi-drupal
+    ports:
+      - 8761:80
+    restart: unless-stopped
+    volumes:
+      - drupal-files:/var/www/html/web/sites/default/files
+      - drupal-private:/var/www/html/private
+    environment:
+      # Drupal database
+      DRUPAL_DB_HOST: db
+      DRUPAL_DB_PORT: 3306
+      DRUPAL_DB_NAME: drupal
+      DRUPAL_DB_USER: drupal
+      DRUPAL_DB_PASSWORD: pass
+
+      # CiviCRM database (separate DB on same host)
+      CIVICRM_DB_HOST: db
+      CIVICRM_DB_NAME: civicrm
+      CIVICRM_DB_USER: drupal
+      CIVICRM_DB_PASSWORD: pass
+
+      # Drupal admin account
+      DRUPAL_ADMIN_USER: admin
+      DRUPAL_ADMIN_PASSWORD: admin
+      DRUPAL_ADMIN_EMAIL: admin@example.com
+      DRUPAL_SITE_NAME: CiviCRM on Drupal
+
+      # Base URL used by CiviCRM
+      DRUPAL_BASE_URL: http://localhost:8761
+
+      # Set to false to skip automatic install
+      AUTO_INSTALL: "true"
+      AUTO_UPDATE: "true"
+
+  db:
+    hostname: db
+    image: mariadb:10.11
+    restart: unless-stopped
+    volumes:
+      - db:/var/lib/mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpass
+      # Both databases are created by the init SQL below; drupal user gets access to both
+      MYSQL_DATABASE: drupal
+      MYSQL_USER: drupal
+      MYSQL_PASSWORD: pass
+    # Create civicrm database on first start
+    entrypoint:
+      - sh
+      - -c
+      - |
+        docker-entrypoint.sh mariadbd &
+        until mariadb -u root -p"$$MYSQL_ROOT_PASSWORD" -e "SELECT 1" 2>/dev/null; do sleep 1; done
+        mariadb -u root -p"$$MYSQL_ROOT_PASSWORD" -e "
+          CREATE DATABASE IF NOT EXISTS civicrm;
+          GRANT ALL PRIVILEGES ON civicrm.* TO '$$MYSQL_USER'@'%';
+          FLUSH PRIVILEGES;
+        "
+        wait
+
+volumes:
+  drupal-files:
+  drupal-private:
+  db:

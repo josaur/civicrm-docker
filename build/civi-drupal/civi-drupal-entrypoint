@@ -1,0 +1,111 @@
+#!/bin/sh
+set -e
+
+# --- Drupal database ---
+DRUPAL_DB_HOST="${DRUPAL_DB_HOST:-db}"
+DRUPAL_DB_PORT="${DRUPAL_DB_PORT:-3306}"
+DRUPAL_DB_NAME="${DRUPAL_DB_NAME:-drupal}"
+DRUPAL_DB_USER="${DRUPAL_DB_USER:-drupal}"
+DRUPAL_DB_PASSWORD="${DRUPAL_DB_PASSWORD:-drupal}"
+
+# --- CiviCRM database (defaults to Drupal DB connection if not set separately) ---
+CIVICRM_DB_HOST="${CIVICRM_DB_HOST:-$DRUPAL_DB_HOST}"
+CIVICRM_DB_PORT="${CIVICRM_DB_PORT:-$DRUPAL_DB_PORT}"
+CIVICRM_DB_NAME="${CIVICRM_DB_NAME:-civicrm}"
+CIVICRM_DB_USER="${CIVICRM_DB_USER:-$DRUPAL_DB_USER}"
+CIVICRM_DB_PASSWORD="${CIVICRM_DB_PASSWORD:-$DRUPAL_DB_PASSWORD}"
+
+# --- Drupal admin ---
+DRUPAL_ADMIN_USER="${DRUPAL_ADMIN_USER:-admin}"
+DRUPAL_ADMIN_PASSWORD="${DRUPAL_ADMIN_PASSWORD:-admin}"
+DRUPAL_ADMIN_EMAIL="${DRUPAL_ADMIN_EMAIL:-admin@example.com}"
+DRUPAL_SITE_NAME="${DRUPAL_SITE_NAME:-CiviCRM}"
+
+# --- URLs ---
+DRUPAL_BASE_URL="${DRUPAL_BASE_URL:-http://localhost}"
+
+# --- Behaviour flags ---
+AUTO_INSTALL="${AUTO_INSTALL:-true}"
+AUTO_UPDATE="${AUTO_UPDATE:-true}"
+
+DRUPAL_ROOT="/opt/drupal"
+DRUPAL_SETTINGS="${DRUPAL_ROOT}/web/sites/default/settings.php"
+CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
+DRUSH="${DRUPAL_ROOT}/vendor/bin/drush"
+
+civicrm_db_ready() {
+    php -r "
+        \$pdo = new PDO('mysql:host=${CIVICRM_DB_HOST};port=${CIVICRM_DB_PORT};dbname=${CIVICRM_DB_NAME}', '${CIVICRM_DB_USER}', '${CIVICRM_DB_PASSWORD}');
+        \$r = \$pdo->query(\"SHOW TABLES LIKE 'civicrm_contact'\");
+        exit(\$r && \$r->rowCount() > 0 ? 0 : 1);
+    " 2>/dev/null
+}
+
+wait_for_db() {
+    echo "Waiting for database at ${DRUPAL_DB_HOST}:${DRUPAL_DB_PORT}..."
+    until php -r "new PDO('mysql:host=${DRUPAL_DB_HOST};port=${DRUPAL_DB_PORT}', '${DRUPAL_DB_USER}', '${DRUPAL_DB_PASSWORD}');" 2>/dev/null; do
+        sleep 2
+    done
+    echo "Database is ready."
+}
+
+install_drupal() {
+    echo "Installing Drupal..."
+    chmod u+w "${DRUPAL_ROOT}/web/sites/default"
+    $DRUSH site:install standard \
+        --db-url="mysql://${DRUPAL_DB_USER}:${DRUPAL_DB_PASSWORD}@${DRUPAL_DB_HOST}:${DRUPAL_DB_PORT}/${DRUPAL_DB_NAME}" \
+        --account-name="${DRUPAL_ADMIN_USER}" \
+        --account-pass="${DRUPAL_ADMIN_PASSWORD}" \
+        --account-mail="${DRUPAL_ADMIN_EMAIL}" \
+        --site-name="${DRUPAL_SITE_NAME}" \
+        --yes \
+        --root="${DRUPAL_ROOT}/web"
+    echo "Drupal installed."
+}
+
+install_civicrm() {
+    echo "Installing CiviCRM..."
+    # cv detects the Drupal root from CWD; pass settings path explicitly for reliability
+    (cd "${DRUPAL_ROOT}/web" && cv core:install \
+        --url="${DRUPAL_BASE_URL}" \
+        --db="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}" \
+        --settings-path="${CIVICRM_SETTINGS}")
+    echo "Rebuilding Drupal cache..."
+    $DRUSH --root="${DRUPAL_ROOT}/web" cache:rebuild
+    echo "CiviCRM installed."
+}
+
+upgrade_civicrm() {
+    echo "Running CiviCRM database upgrades..."
+    CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv upgrade:db && \
+    CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv ext:upgrade-db
+    echo "CiviCRM upgrades done."
+}
+
+# --- Main ---
+
+if [ "$AUTO_INSTALL" = "true" ]; then
+    wait_for_db
+
+    if [ ! -f "$DRUPAL_SETTINGS" ]; then
+        install_drupal
+        install_civicrm
+    elif ! civicrm_db_ready; then
+        # Drupal installed but CiviCRM DB tables missing (e.g. previous install crashed)
+        echo "Drupal installed, CiviCRM DB not ready — (re)installing CiviCRM..."
+        install_civicrm
+    else
+        echo "Already fully installed."
+        if [ "$AUTO_UPDATE" = "true" ]; then
+            upgrade_civicrm
+        fi
+    fi
+else
+    echo "AUTO_INSTALL=false — skipping automatic initialization."
+fi
+
+echo "Fixing file permissions..."
+chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default"
+
+echo "Starting Apache..."
+exec docker-php-entrypoint "$@"
