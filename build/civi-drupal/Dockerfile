@@ -8,7 +8,7 @@ ARG CIVICRM_VERSION=6.10.1
 
 FROM drupal:${DRUPAL_VERSION} AS build
 
-ARG CIVICRM_VERSION
+ARG CIVICRM_VERSION=6.10.1
 
 RUN set -eux; \
     apt-get update && \

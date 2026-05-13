@@ -84,6 +84,18 @@ CiviCRM can share the same database server but should use a separate database. A
 |---|---|---|
 | `AUTO_INSTALL` | `true` | Run Drupal + CiviCRM install on first start |
 | `AUTO_UPDATE` | `true` | Run `cv upgrade:db` on every start when already installed |
+| `CIVICRM_EXTENSIONS` | _(empty)_ | Comma-separated list of CiviCRM extensions to install and enable on every start |
+
+### Extensions
+
+`CIVICRM_EXTENSIONS` accepts a comma-separated list of extension keys. On every container start, each extension is ensured to be installed and enabled — extensions are never disabled by removing them from the list.
+
+```yaml
+environment:
+  CIVICRM_EXTENSIONS: "org.civicrm.volunteer, de.systopia.donrec"
+```
+
+For each extension the entrypoint first tries `cv dl <key>` to download it from the [CiviCRM Extension Directory](https://civicrm.org/extensions) and enable it. If the extension is already present in the filesystem (e.g. mounted as a volume), `cv en <key>` is used as a fallback.
 
 ## Volumes
 

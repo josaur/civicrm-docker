@@ -27,6 +27,7 @@ DRUPAL_BASE_URL="${DRUPAL_BASE_URL:-http://localhost}"
 # --- Behaviour flags ---
 AUTO_INSTALL="${AUTO_INSTALL:-true}"
 AUTO_UPDATE="${AUTO_UPDATE:-true}"
+CIVICRM_EXTENSIONS="${CIVICRM_EXTENSIONS:-}"
 
 DRUPAL_ROOT="/opt/drupal"
 DRUPAL_SETTINGS="${DRUPAL_ROOT}/web/sites/default/settings.php"
@@ -82,6 +83,22 @@ upgrade_civicrm() {
     echo "CiviCRM upgrades done."
 }
 
+enable_extensions() {
+    [ -z "$CIVICRM_EXTENSIONS" ] && return
+    echo "Enabling CiviCRM extensions: ${CIVICRM_EXTENSIONS}"
+    # Process each extension individually: try cv dl first (downloads + enables if not local),
+    # fall back to cv en for extensions already present in the filesystem.
+    echo "$CIVICRM_EXTENSIONS" | tr ',' '\n' | while read -r ext; do
+        ext=$(echo "$ext" | tr -d ' ')
+        [ -z "$ext" ] && continue
+        echo "  Installing/enabling: $ext"
+        if ! (cd "${DRUPAL_ROOT}/web" && CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv dl "$ext" 2>/dev/null); then
+            (cd "${DRUPAL_ROOT}/web" && CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv en "$ext")
+        fi
+    done
+    echo "Extensions enabled."
+}
+
 # --- Main ---
 
 if [ "$AUTO_INSTALL" = "true" ]; then
@@ -90,15 +107,18 @@ if [ "$AUTO_INSTALL" = "true" ]; then
     if [ ! -f "$DRUPAL_SETTINGS" ]; then
         install_drupal
         install_civicrm
+        enable_extensions
     elif ! civicrm_db_ready; then
         # Drupal installed but CiviCRM DB tables missing (e.g. previous install crashed)
         echo "Drupal installed, CiviCRM DB not ready — (re)installing CiviCRM..."
         install_civicrm
+        enable_extensions
     else
         echo "Already fully installed."
         if [ "$AUTO_UPDATE" = "true" ]; then
             upgrade_civicrm
         fi
+        enable_extensions
     fi
 else
     echo "AUTO_INSTALL=false — skipping automatic initialization."
