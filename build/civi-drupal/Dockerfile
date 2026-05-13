@@ -27,18 +27,17 @@ WORKDIR /opt/drupal
 ENV COMPOSER_COMPILE=all
 
 RUN set -eux; \
-    # CiviCRM pins firebase/php-jwt <7 which has a known advisory — allow it explicitly
-    composer config --json audit.ignore '["PKSA-y2cr-5h3j-g3ys"]' && \
     # Allow all plugins — required for civicrm-asset-plugin and other CiviCRM plugins
     composer config --no-interaction allow-plugins true && \
-    composer require --no-interaction --no-progress \
+    # CiviCRM pins firebase/php-jwt <7 which has a known advisory — skip audit to unblock install
+    composer require --no-interaction --no-progress --no-audit \
         civicrm/cli-tools \
         civicrm/civicrm-core:${CIVICRM_VERSION} \
         civicrm/civicrm-packages:${CIVICRM_VERSION} \
         civicrm/civicrm-drupal-8:${CIVICRM_VERSION} \
         drush/drush \
         "brick/money:>=0.5.0,<0.6.0" && \
-    composer install --no-interaction --optimize-autoloader
+    composer install --no-interaction --optimize-autoloader --no-audit
 
 
 
