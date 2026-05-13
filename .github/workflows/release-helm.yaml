@@ -1,0 +1,78 @@
+name: release-helm
+
+on:
+  push:
+    tags:
+      - "helm/v*.*.*"   # trigger: git tag helm/v0.1.0
+  workflow_dispatch:
+    inputs:
+      chart_version:
+        description: "Chart version to publish (e.g. 0.1.0)"
+        required: true
+
+env:
+  REGISTRY: ghcr.io
+  CHART_PATH: helm/civicrm-drupal
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "latest"
+
+      - name: Add Bitnami repo (needed for dependency lint)
+        run: helm repo add bitnami https://charts.bitnami.com/bitnami
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART_PATH }}
+
+      - name: Lint chart
+        run: helm lint ${{ env.CHART_PATH }} --strict
+
+  publish:
+    needs: lint
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: "latest"
+
+      - name: Resolve chart version
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "chart_version=${{ inputs.chart_version }}" >> "$GITHUB_OUTPUT"
+          else
+            # strip "helm/v" prefix from tag name
+            echo "chart_version=${GITHUB_REF_NAME#helm/v}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART_PATH }}
+
+      - name: Package chart
+        run: |
+          helm package ${{ env.CHART_PATH }} \
+            --version "${{ steps.version.outputs.chart_version }}" \
+            --destination /tmp/helm-output
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ${{ env.REGISTRY }} \
+            --username ${{ github.actor }} \
+            --password-stdin
+
+      - name: Push chart to GHCR OCI registry
+        run: |
+          helm push /tmp/helm-output/*.tgz \
+            oci://${{ env.REGISTRY }}/${{ github.repository_owner }}/charts
