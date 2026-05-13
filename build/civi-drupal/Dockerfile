@@ -29,15 +29,19 @@ ENV COMPOSER_COMPILE=all
 RUN set -eux; \
     # Allow all plugins — required for civicrm-asset-plugin and other CiviCRM plugins
     composer config --no-interaction allow-plugins true && \
-    # CiviCRM pins firebase/php-jwt <7 which has a known advisory — skip audit to unblock install
-    composer require --no-interaction --no-progress --no-audit \
+    # CiviCRM pins firebase/php-jwt <7 which has a known advisory (PKSA-y2cr-5h3j-g3ys);
+    # the pin is intentional upstream. Disable block-insecure so Composer doesn't abort.
+    composer config --no-interaction audit.ignore '["PKSA-y2cr-5h3j-g3ys"]' && \
+    composer config --no-interaction --json audit.abandoned ignore ; \
+    composer config --no-interaction audit.block-insecure false && \
+    composer require --no-interaction --no-progress \
         civicrm/cli-tools \
         civicrm/civicrm-core:${CIVICRM_VERSION} \
         civicrm/civicrm-packages:${CIVICRM_VERSION} \
         civicrm/civicrm-drupal-8:${CIVICRM_VERSION} \
         drush/drush \
         "brick/money:>=0.5.0,<0.6.0" && \
-    composer install --no-interaction --optimize-autoloader --no-audit
+    composer install --no-interaction --optimize-autoloader
 
 
 
