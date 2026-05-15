@@ -29,6 +29,11 @@ AUTO_INSTALL="${AUTO_INSTALL:-true}"
 AUTO_UPDATE="${AUTO_UPDATE:-true}"
 CIVICRM_EXTENSIONS="${CIVICRM_EXTENSIONS:-}"
 
+# --- Cron ---
+# Set to a crontab schedule expression to enable in-container cron, e.g. "*/15 * * * *"
+# Leave empty (default) to disable — use an external scheduler instead.
+CRON_SCHEDULE="${CRON_SCHEDULE:-}"
+
 DRUPAL_ROOT="/opt/drupal"
 DRUPAL_SETTINGS="${DRUPAL_ROOT}/web/sites/default/settings.php"
 CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
@@ -126,6 +131,22 @@ fi
 
 echo "Fixing file permissions..."
 chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default"
+
+# --- Cron setup ---
+if [ -n "$CRON_SCHEDULE" ]; then
+    echo "Installing cron schedule: ${CRON_SCHEDULE}"
+    # /etc/cron.d/ files are picked up automatically by cron — no crontab call needed.
+    # Redirect output to PID 1 so jobs appear in docker logs.
+    printf 'SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n' \
+        > /etc/cron.d/civicrm-drupal
+    printf '%s www-data %s --root=%s/web cron --quiet\n' \
+        "$CRON_SCHEDULE" "$DRUSH" "$DRUPAL_ROOT" >> /etc/cron.d/civicrm-drupal
+    printf '%s www-data sh -c "cd %s/web && CIVICRM_SETTINGS=%s cv cron --quiet"\n' \
+        "$CRON_SCHEDULE" "$DRUPAL_ROOT" "$CIVICRM_SETTINGS" >> /etc/cron.d/civicrm-drupal
+    chmod 0644 /etc/cron.d/civicrm-drupal
+    service cron start
+    echo "Cron started."
+fi
 
 echo "Starting Apache..."
 exec docker-php-entrypoint "$@"

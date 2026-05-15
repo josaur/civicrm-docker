@@ -48,10 +48,13 @@ ingress:
   #      - civicrm.example.com
 
 # -------------------------------------------------------------------
-# Persistent storage for Drupal file uploads
+# Persistent storage
 # -------------------------------------------------------------------
 persistence:
-  files:
+  # Mounts the entire sites/default/ directory — contains settings.php,
+  # civicrm.settings.php, and the files/ subdirectory. Must be persisted
+  # so config survives container restarts.
+  sites:
     enabled: true
     storageClass: ""
     accessMode: ReadWriteOnce

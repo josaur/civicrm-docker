@@ -1,19 +1,19 @@
-{{- if .Values.persistence.files.enabled }}
+{{- if .Values.persistence.sites.enabled }}
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: {{ include "civicrm-drupal.fullname" . }}-files
+  name: {{ include "civicrm-drupal.fullname" . }}-sites
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
 spec:
   accessModes:
-    - {{ .Values.persistence.files.accessMode }}
-  {{- if .Values.persistence.files.storageClass }}
-  storageClassName: {{ .Values.persistence.files.storageClass }}
+    - {{ .Values.persistence.sites.accessMode }}
+  {{- if .Values.persistence.sites.storageClass }}
+  storageClassName: {{ .Values.persistence.sites.storageClass }}
   {{- end }}
   resources:
     requests:
-      storage: {{ .Values.persistence.files.size }}
+      storage: {{ .Values.persistence.sites.size }}
 {{- end }}
 {{- if .Values.persistence.private.enabled }}
 ---

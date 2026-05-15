@@ -112,9 +112,9 @@ spec:
             {{- toYaml .Values.resources | nindent 12 }}
 
           volumeMounts:
-            {{- if .Values.persistence.files.enabled }}
-            - name: drupal-files
-              mountPath: /opt/drupal/web/sites/default/files
+            {{- if .Values.persistence.sites.enabled }}
+            - name: drupal-sites
+              mountPath: /opt/drupal/web/sites/default
             {{- end }}
             {{- if .Values.persistence.private.enabled }}
             - name: drupal-private
@@ -122,10 +122,10 @@ spec:
             {{- end }}
 
       volumes:
-        {{- if .Values.persistence.files.enabled }}
-        - name: drupal-files
+        {{- if .Values.persistence.sites.enabled }}
+        - name: drupal-sites
           persistentVolumeClaim:
-            claimName: {{ include "civicrm-drupal.fullname" . }}-files
+            claimName: {{ include "civicrm-drupal.fullname" . }}-sites
         {{- end }}
         {{- if .Values.persistence.private.enabled }}
         - name: drupal-private

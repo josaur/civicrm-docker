@@ -7,8 +7,8 @@ services:
       - 8761:80
     restart: unless-stopped
     volumes:
-      - drupal-files:/var/www/html/web/sites/default/files
-      - drupal-private:/var/www/html/private
+      - drupal-sites:/opt/drupal/web/sites/default
+      - drupal-private:/opt/drupal/private
     environment:
       # Drupal database
       DRUPAL_DB_HOST: db
@@ -35,6 +35,10 @@ services:
       # Set to false to skip automatic install
       AUTO_INSTALL: "true"
       AUTO_UPDATE: "true"
+
+      # Cron: runs Drupal + CiviCRM cron inside the container on the given schedule.
+      # Remove or leave empty to disable (use an external scheduler instead).
+      CRON_SCHEDULE: "*/1 * * * *"
 
   db:
     hostname: db
@@ -63,6 +67,6 @@ services:
         wait
 
 volumes:
-  drupal-files:
+  drupal-sites:
   drupal-private:
   db:
