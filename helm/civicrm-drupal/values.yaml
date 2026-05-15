@@ -75,8 +75,9 @@ app:
   # Comma-separated CiviCRM extension keys, e.g. "org.civicrm.search_kit"
   civicrmExtensions: ""
 
-  # Cron schedule in crontab format. Leave empty to disable in-container cron.
-  # Example: "*/15 * * * *" runs every 15 minutes.
+  # In-container cron (runs cron daemon inside the app pod).
+  # Leave empty to disable. Mutually exclusive with cronjob.enabled.
+  # Example: "*/15 * * * *"
   cronSchedule: ""
 
   drupal:
@@ -111,6 +112,22 @@ app:
   #   drupal-admin-password, drupal-db-password, civicrm-db-password
   # When set the plaintext password fields above are ignored.
   existingSecret: ""
+
+# -------------------------------------------------------------------
+# Kubernetes CronJob for Drupal + CiviCRM cron
+# Runs a short-lived pod on schedule instead of an in-container daemon.
+# Mutually exclusive with app.cronSchedule.
+# -------------------------------------------------------------------
+cronjob:
+  enabled: false
+  # Cron schedule in crontab format.
+  schedule: "*/15 * * * *"
+  # Keep last N successful / failed job pods for inspection.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # Prevent overlapping runs if a job takes longer than the interval.
+  concurrencyPolicy: Forbid
+  resources: {}
 
 # -------------------------------------------------------------------
 # MariaDB sub-chart (Bitnami)

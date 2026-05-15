@@ -1,0 +1,102 @@
+{{- if .Values.cronjob.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}-cron
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+    app.kubernetes.io/component: cron
+spec:
+  schedule: {{ .Values.cronjob.schedule | quote }}
+  concurrencyPolicy: {{ .Values.cronjob.concurrencyPolicy }}
+  successfulJobsHistoryLimit: {{ .Values.cronjob.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      template:
+        metadata:
+          labels:
+            {{- include "civicrm-drupal.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/component: cron
+        spec:
+          restartPolicy: OnFailure
+          {{- with .Values.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: cron
+              image: "{{ .Values.image.repository }}:{{ include "civicrm-drupal.imageTag" . }}"
+              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              # Skip the full entrypoint bootstrap — only run the cron commands.
+              command:
+                - sh
+                - -c
+                - |
+                  set -e
+                  DRUPAL_ROOT=/opt/drupal
+                  DRUSH="${DRUPAL_ROOT}/vendor/bin/drush"
+                  CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
+                  echo "Running Drupal cron..."
+                  "$DRUSH" --root="${DRUPAL_ROOT}/web" cron
+                  echo "Running CiviCRM cron..."
+                  cd "${DRUPAL_ROOT}/web" && CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv cron
+                  echo "Done."
+              env:
+                # Database env vars are needed so Drupal/CiviCRM can bootstrap.
+                - name: DRUPAL_DB_HOST
+                  value: {{ include "civicrm-drupal.dbHost" . | quote }}
+                - name: DRUPAL_DB_PORT
+                  value: {{ .Values.app.drupalDb.port | quote }}
+                - name: DRUPAL_DB_NAME
+                  value: {{ .Values.app.drupalDb.name | quote }}
+                - name: DRUPAL_DB_USER
+                  value: {{ .Values.app.drupalDb.user | quote }}
+                - name: DRUPAL_DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                      key: drupal-db-password
+                - name: CIVICRM_DB_HOST
+                  value: {{ include "civicrm-drupal.civicrmDbHost" . | quote }}
+                - name: CIVICRM_DB_PORT
+                  value: {{ .Values.app.civicrmDb.port | quote }}
+                - name: CIVICRM_DB_NAME
+                  value: {{ .Values.app.civicrmDb.name | quote }}
+                - name: CIVICRM_DB_USER
+                  value: {{ include "civicrm-drupal.civicrmDbUser" . | quote }}
+                - name: CIVICRM_DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                      key: civicrm-db-password
+                - name: DRUPAL_BASE_URL
+                  value: {{ .Values.app.drupal.baseUrl | quote }}
+                # Prevent the entrypoint from running install/update logic.
+                - name: AUTO_INSTALL
+                  value: "false"
+                - name: AUTO_UPDATE
+                  value: "false"
+              resources:
+                {{- toYaml .Values.cronjob.resources | nindent 16 }}
+              volumeMounts:
+                {{- if .Values.persistence.sites.enabled }}
+                - name: drupal-sites
+                  mountPath: /opt/drupal/web/sites/default
+                {{- end }}
+                {{- if .Values.persistence.private.enabled }}
+                - name: drupal-private
+                  mountPath: /opt/drupal/private
+                {{- end }}
+          volumes:
+            {{- if .Values.persistence.sites.enabled }}
+            - name: drupal-sites
+              persistentVolumeClaim:
+                claimName: {{ include "civicrm-drupal.fullname" . }}-sites
+            {{- end }}
+            {{- if .Values.persistence.private.enabled }}
+            - name: drupal-private
+              persistentVolumeClaim:
+                claimName: {{ include "civicrm-drupal.fullname" . }}-private
+            {{- end }}
+{{- end }}
