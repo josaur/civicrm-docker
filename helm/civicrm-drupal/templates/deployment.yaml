@@ -93,6 +93,10 @@ spec:
             - name: CIVICRM_EXTENSIONS
               value: {{ .Values.app.civicrmExtensions | quote }}
 
+            # --- Cron ---
+            - name: CRON_SCHEDULE
+              value: {{ .Values.app.cronSchedule | quote }}
+
           livenessProbe:
             httpGet:
               path: /

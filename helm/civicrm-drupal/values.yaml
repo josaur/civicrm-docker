@@ -75,6 +75,10 @@ app:
   # Comma-separated CiviCRM extension keys, e.g. "org.civicrm.search_kit"
   civicrmExtensions: ""
 
+  # Cron schedule in crontab format. Leave empty to disable in-container cron.
+  # Example: "*/15 * * * *" runs every 15 minutes.
+  cronSchedule: ""
+
   drupal:
     siteName: "CiviCRM"
     # Must match ingress.host (or LoadBalancer IP) so CiviCRM links work
