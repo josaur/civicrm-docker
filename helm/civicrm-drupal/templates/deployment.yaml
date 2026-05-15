@@ -1,0 +1,151 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "civicrm-drupal.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      annotations:
+        {{- with .Values.podAnnotations }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+      labels:
+        {{- include "civicrm-drupal.selectorLabels" . | nindent 8 }}
+        {{- with .Values.podLabels }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: drupal
+          image: "{{ .Values.image.repository }}:{{ include "civicrm-drupal.imageTag" . }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          ports:
+            - name: http
+              containerPort: 80
+              protocol: TCP
+          env:
+            # --- Drupal database ---
+            - name: DRUPAL_DB_HOST
+              value: {{ include "civicrm-drupal.dbHost" . | quote }}
+            - name: DRUPAL_DB_PORT
+              value: {{ .Values.app.drupalDb.port | quote }}
+            - name: DRUPAL_DB_NAME
+              value: {{ .Values.app.drupalDb.name | quote }}
+            - name: DRUPAL_DB_USER
+              value: {{ .Values.app.drupalDb.user | quote }}
+            - name: DRUPAL_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: drupal-db-password
+
+            # --- CiviCRM database ---
+            - name: CIVICRM_DB_HOST
+              value: {{ include "civicrm-drupal.civicrmDbHost" . | quote }}
+            - name: CIVICRM_DB_PORT
+              value: {{ .Values.app.civicrmDb.port | quote }}
+            - name: CIVICRM_DB_NAME
+              value: {{ .Values.app.civicrmDb.name | quote }}
+            - name: CIVICRM_DB_USER
+              value: {{ include "civicrm-drupal.civicrmDbUser" . | quote }}
+            - name: CIVICRM_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: civicrm-db-password
+
+            # --- Drupal admin ---
+            - name: DRUPAL_ADMIN_USER
+              value: {{ .Values.app.drupal.admin.user | quote }}
+            - name: DRUPAL_ADMIN_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: drupal-admin-password
+            - name: DRUPAL_ADMIN_EMAIL
+              value: {{ .Values.app.drupal.admin.email | quote }}
+            - name: DRUPAL_SITE_NAME
+              value: {{ .Values.app.drupal.siteName | quote }}
+
+            # --- URLs ---
+            - name: DRUPAL_BASE_URL
+              value: {{ .Values.app.drupal.baseUrl | quote }}
+
+            # --- Behaviour ---
+            - name: AUTO_INSTALL
+              value: {{ .Values.app.autoInstall | quote }}
+            - name: AUTO_UPDATE
+              value: {{ .Values.app.autoUpdate | quote }}
+            - name: CIVICRM_EXTENSIONS
+              value: {{ .Values.app.civicrmExtensions | quote }}
+
+            # --- Cron ---
+            - name: CRON_SCHEDULE
+              value: {{ .Values.app.cronSchedule | quote }}
+
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 60
+            periodSeconds: 30
+            failureThreshold: 5
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            failureThreshold: 10
+
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+
+          volumeMounts:
+            {{- if .Values.persistence.sites.enabled }}
+            - name: drupal-sites
+              mountPath: /opt/drupal/web/sites/default
+            {{- end }}
+            {{- if .Values.persistence.private.enabled }}
+            - name: drupal-private
+              mountPath: /opt/drupal/private
+            {{- end }}
+
+      volumes:
+        {{- if .Values.persistence.sites.enabled }}
+        - name: drupal-sites
+          persistentVolumeClaim:
+            claimName: {{ include "civicrm-drupal.fullname" . }}-sites
+        {{- end }}
+        {{- if .Values.persistence.private.enabled }}
+        - name: drupal-private
+          persistentVolumeClaim:
+            claimName: {{ include "civicrm-drupal.fullname" . }}-private
+        {{- end }}
+
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

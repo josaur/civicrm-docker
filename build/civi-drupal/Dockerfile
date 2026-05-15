@@ -52,6 +52,7 @@ FROM drupal:${DRUPAL_VERSION}
 RUN set -eux; \
     apt-get update && \
     apt-get install -y --no-install-recommends \
+        cron \
         libicu-dev \
         libpng-dev \
         libzip-dev \

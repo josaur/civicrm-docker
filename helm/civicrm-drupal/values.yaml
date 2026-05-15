@@ -1,0 +1,158 @@
+# -------------------------------------------------------------------
+# Image
+# -------------------------------------------------------------------
+image:
+  repository: ghcr.io/josaur/civicrm-docker-drupal
+  tag: ""          # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# -------------------------------------------------------------------
+# Deployment
+# -------------------------------------------------------------------
+replicaCount: 1
+
+podAnnotations: {}
+podLabels: {}
+podSecurityContext: {}
+securityContext: {}
+resources: {}
+nodeSelector: {}
+tolerations: []
+affinity: {}
+
+# -------------------------------------------------------------------
+# Service
+# -------------------------------------------------------------------
+service:
+  type: ClusterIP
+  port: 80
+
+# -------------------------------------------------------------------
+# Ingress
+# -------------------------------------------------------------------
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  host: civicrm.example.com
+  tls: []
+  #  - secretName: civicrm-tls
+  #    hosts:
+  #      - civicrm.example.com
+
+# -------------------------------------------------------------------
+# Persistent storage
+# -------------------------------------------------------------------
+persistence:
+  # Mounts the entire sites/default/ directory — contains settings.php,
+  # civicrm.settings.php, and the files/ subdirectory. Must be persisted
+  # so config survives container restarts.
+  sites:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 5Gi
+  private:
+    enabled: true
+    storageClass: ""
+    accessMode: ReadWriteOnce
+    size: 1Gi
+
+# -------------------------------------------------------------------
+# Drupal / CiviCRM application
+# -------------------------------------------------------------------
+app:
+  # Behaviour flags
+  autoInstall: "true"
+  autoUpdate: "true"
+  # Comma-separated CiviCRM extension keys, e.g. "org.civicrm.search_kit"
+  civicrmExtensions: ""
+
+  # In-container cron (runs cron daemon inside the app pod).
+  # Leave empty to disable. Mutually exclusive with cronjob.enabled.
+  # Example: "*/15 * * * *"
+  cronSchedule: ""
+
+  drupal:
+    siteName: "CiviCRM"
+    # Must match ingress.host (or LoadBalancer IP) so CiviCRM links work
+    baseUrl: "http://civicrm.example.com"
+    admin:
+      user: admin
+      email: "admin@example.com"
+      # Use existingSecret instead of plaintext in production
+      password: "changeme"
+
+  # Drupal database — auto-points at the Bitnami sub-chart when mariadb.enabled=true
+  drupalDb:
+    # Leave host empty to use the in-chart MariaDB service name
+    host: ""
+    port: 3306
+    name: drupal
+    user: drupal
+    # Use existingSecret instead of plaintext in production
+    password: "changeme"
+
+  # CiviCRM database — falls back to drupalDb values when left empty
+  civicrmDb:
+    host: ""     # empty → same host as drupalDb
+    port: 3306
+    name: civicrm
+    user: ""     # empty → same user as drupalDb
+    password: "" # empty → same password as drupalDb
+
+  # Name of an existing Secret with keys:
+  #   drupal-admin-password, drupal-db-password, civicrm-db-password
+  # When set the plaintext password fields above are ignored.
+  existingSecret: ""
+
+# -------------------------------------------------------------------
+# Kubernetes CronJob for Drupal + CiviCRM cron
+# Runs a short-lived pod on schedule instead of an in-container daemon.
+# Mutually exclusive with app.cronSchedule.
+# -------------------------------------------------------------------
+cronjob:
+  enabled: false
+  # Cron schedule in crontab format.
+  schedule: "*/15 * * * *"
+  # Keep last N successful / failed job pods for inspection.
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 1
+  # Prevent overlapping runs if a job takes longer than the interval.
+  concurrencyPolicy: Forbid
+  resources: {}
+
+# -------------------------------------------------------------------
+# MariaDB sub-chart (Bitnami)
+# https://github.com/bitnami/charts/tree/main/bitnami/mariadb
+# Set mariadb.enabled=false to use an external database.
+# -------------------------------------------------------------------
+mariadb:
+  enabled: true
+
+  auth:
+    rootPassword: "rootchangeme"
+    database: drupal
+    username: drupal
+    # Must match app.drupalDb.password (or use existingSecret)
+    password: "changeme"
+    # existingSecret: ""
+
+  primary:
+    persistence:
+      enabled: true
+      storageClass: ""
+      size: 10Gi
+
+  initdbScripts:
+    init-civicrm.sql: |
+      CREATE DATABASE IF NOT EXISTS civicrm;
+      GRANT ALL PRIVILEGES ON civicrm.* TO 'drupal'@'%';
+      FLUSH PRIVILEGES;
