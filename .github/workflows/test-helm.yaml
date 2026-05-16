@@ -1,0 +1,244 @@
+name: test-helm
+
+on:
+  pull_request:
+    paths:
+      - "helm/**"
+      - ".github/workflows/test-helm.yaml"
+  push:
+    branches:
+      - main
+    paths:
+      - "helm/**"
+  workflow_dispatch:
+
+env:
+  IMAGE_REPO: ghcr.io/josaur/civicrm-docker-drupal
+  IMAGE_TAG: latest
+  CHART: helm/civicrm-drupal
+  NAMESPACE: civicrm-test
+
+jobs:
+  # ---------------------------------------------------------------
+  # Scenario 1: install without persistence + pod restart
+  # ---------------------------------------------------------------
+  test-no-persistence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+
+      - name: Pull and load image into kind
+        run: |
+          docker pull ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+          kind load docker-image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} --name kind
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART }}
+
+      - name: Install chart (no persistence)
+        run: |
+          helm install civicrm ${{ env.CHART }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --wait --timeout 10m \
+            --set image.repository=${{ env.IMAGE_REPO }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set image.pullPolicy=Never \
+            --set persistence.sites.enabled=false \
+            --set persistence.private.enabled=false \
+            --set mariadb.primary.persistence.enabled=false
+
+      - name: Verify CiviCRM API responds
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
+            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+
+      - name: Delete pod (simulate restart)
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl delete pod -n ${{ env.NAMESPACE }} $POD
+          kubectl rollout status deployment/civicrm-civicrm-drupal \
+            -n ${{ env.NAMESPACE }} --timeout=10m
+
+      - name: Verify CiviCRM still works after restart
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
+            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+          kubectl describe pods -n ${{ env.NAMESPACE }}
+          kubectl logs -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal --tail=50 || true
+
+  # ---------------------------------------------------------------
+  # Scenario 2: install with persistence + pod restart
+  # ---------------------------------------------------------------
+  test-with-persistence:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+
+      - name: Pull and load image into kind
+        run: |
+          docker pull ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+          kind load docker-image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} --name kind
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART }}
+
+      - name: Install chart (with persistence)
+        run: |
+          helm install civicrm ${{ env.CHART }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --wait --timeout 10m \
+            --set image.repository=${{ env.IMAGE_REPO }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set image.pullPolicy=Never \
+            --set persistence.sites.enabled=true \
+            --set persistence.sites.size=1Gi \
+            --set persistence.private.enabled=true \
+            --set persistence.private.size=500Mi \
+            --set mariadb.primary.persistence.enabled=true \
+            --set mariadb.primary.persistence.size=2Gi
+
+      - name: Verify CiviCRM API responds
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
+            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+
+      - name: Delete pod and verify data survives
+        run: |
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl delete pod -n ${{ env.NAMESPACE }} $POD
+          kubectl rollout status deployment/civicrm-civicrm-drupal \
+            -n ${{ env.NAMESPACE }} --timeout=10m
+          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
+            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
+          kubectl describe pods -n ${{ env.NAMESPACE }}
+          kubectl logs -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/name=civicrm-drupal --tail=50 || true
+
+  # ---------------------------------------------------------------
+  # Scenario 3: Kubernetes CronJob executes successfully
+  # ---------------------------------------------------------------
+  test-cronjob:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create kind cluster
+        uses: helm/kind-action@v1
+        with:
+          cluster_name: kind
+
+      - name: Pull and load image into kind
+        run: |
+          docker pull ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }}
+          kind load docker-image ${{ env.IMAGE_REPO }}:${{ env.IMAGE_TAG }} --name kind
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: Build chart dependencies
+        run: helm dependency build ${{ env.CHART }}
+
+      - name: Install chart with CronJob enabled
+        run: |
+          helm install civicrm ${{ env.CHART }} \
+            --namespace ${{ env.NAMESPACE }} \
+            --create-namespace \
+            --wait --timeout 10m \
+            --set image.repository=${{ env.IMAGE_REPO }} \
+            --set image.tag=${{ env.IMAGE_TAG }} \
+            --set image.pullPolicy=Never \
+            --set persistence.sites.enabled=false \
+            --set persistence.private.enabled=false \
+            --set mariadb.primary.persistence.enabled=false \
+            --set cronjob.enabled=true \
+            --set "cronjob.schedule=* * * * *"
+
+      - name: Wait for CronJob to trigger a Job (max 7m30s)
+        run: |
+          for i in $(seq 1 90); do
+            JOB=$(kubectl get jobs -n ${{ env.NAMESPACE }} \
+              -l app.kubernetes.io/component=cron \
+              -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+            if [ -n "$JOB" ]; then
+              echo "Job created: $JOB"
+              break
+            fi
+            sleep 5
+          done
+          if [ -z "$JOB" ]; then
+            echo "ERROR: no CronJob-triggered Job appeared within 7m30s"
+            kubectl get cronjob -n ${{ env.NAMESPACE }}
+            exit 1
+          fi
+
+      - name: Wait for Job to complete
+        run: |
+          JOB=$(kubectl get jobs -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/component=cron \
+            -o jsonpath='{.items[0].metadata.name}')
+          kubectl wait job/$JOB \
+            -n ${{ env.NAMESPACE }} \
+            --for=condition=complete \
+            --timeout=5m
+
+      - name: Show cron job logs
+        run: |
+          kubectl logs -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/component=cron \
+            --tail=50
+
+      - name: Debug on failure
+        if: failure()
+        run: |
+          kubectl get pods,jobs,cronjobs -n ${{ env.NAMESPACE }} -o wide
+          kubectl describe jobs -n ${{ env.NAMESPACE }} || true
+          kubectl logs -n ${{ env.NAMESPACE }} \
+            -l app.kubernetes.io/component=cron --tail=50 || true
