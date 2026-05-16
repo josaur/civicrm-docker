@@ -51,9 +51,9 @@ ingress:
 # Persistent storage
 # -------------------------------------------------------------------
 persistence:
-  # Mounts the entire sites/default/ directory — contains settings.php,
-  # civicrm.settings.php, and the files/ subdirectory. Must be persisted
-  # so config survives container restarts.
+  # Mounts sites/default/files/ — user uploads, CiviCRM files, Drupal cache.
+  # settings.php is written by the entrypoint; civicrm.settings.php is served
+  # from the ConfigMap. Neither needs to be on the PVC.
   sites:
     enabled: true
     storageClass: ""

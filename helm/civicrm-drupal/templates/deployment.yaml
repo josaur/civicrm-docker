@@ -121,16 +121,16 @@ spec:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 60
+            initialDelaySeconds: 120
             periodSeconds: 30
-            failureThreshold: 5
+            failureThreshold: 10
           readinessProbe:
             httpGet:
               path: /
               port: http
-            initialDelaySeconds: 30
+            initialDelaySeconds: 60
             periodSeconds: 10
-            failureThreshold: 10
+            failureThreshold: 30
 
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -138,7 +138,7 @@ spec:
           volumeMounts:
             {{- if .Values.persistence.sites.enabled }}
             - name: drupal-sites
-              mountPath: /opt/drupal/web/sites/default
+              mountPath: /opt/drupal/web/sites/default/files
             {{- end }}
             {{- if .Values.persistence.private.enabled }}
             - name: drupal-private
