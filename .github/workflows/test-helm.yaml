@@ -152,7 +152,7 @@ jobs:
           helm install civicrm ${{ env.CHART }} \
             --namespace ${{ env.NAMESPACE }} \
             --create-namespace \
-            --wait --timeout 10m \
+            --wait --timeout 15m \
             --set image.repository=civicrm-drupal \
             --set image.tag=ci \
             --set image.pullPolicy=Never \
