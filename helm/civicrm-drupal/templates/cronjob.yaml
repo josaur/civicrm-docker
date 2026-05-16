@@ -101,6 +101,11 @@ spec:
                 {{- if .Values.persistence.sites.enabled }}
                 - name: drupal-sites
                   mountPath: /opt/drupal/web/sites/default
+                {{- else }}
+                - name: civicrm-settings
+                  mountPath: /opt/drupal/web/sites/default/settings.php
+                  subPath: settings.php
+                  readOnly: true
                 {{- end }}
                 {{- if .Values.persistence.private.enabled }}
                 - name: drupal-private

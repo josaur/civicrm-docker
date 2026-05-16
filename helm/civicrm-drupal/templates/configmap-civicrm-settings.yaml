@@ -1,4 +1,3 @@
-{{- $secretName := .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -6,6 +5,22 @@ metadata:
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
 data:
+  settings.php: |
+    <?php
+    $databases['default']['default'] = [
+      'database'        => '{{ .Values.app.drupalDb.name }}',
+      'username'        => '{{ .Values.app.drupalDb.user }}',
+      'password'        => getenv('DRUPAL_DB_PASSWORD'),
+      'host'            => '{{ include "civicrm-drupal.dbHost" . }}',
+      'port'            => '{{ .Values.app.drupalDb.port }}',
+      'driver'          => 'mysql',
+      'prefix'          => '',
+      'isolation_level' => 'READ COMMITTED',
+      'namespace'       => 'Drupal\\mysql\\Driver\\Database\\mysql',
+      'autoload'        => 'core/modules/mysql/src/Driver/Database/mysql/',
+    ];
+    $settings['config_sync_directory'] = 'sites/default/files/config/sync';
+    $settings['hash_salt'] = '{{ .Values.app.drupalDb.name }}-{{ include "civicrm-drupal.dbHost" . }}-civicrm-docker';
   civicrm.settings.php: |
     <?php
     global $civicrm_root, $civicrm_setting, $civicrm_paths;
