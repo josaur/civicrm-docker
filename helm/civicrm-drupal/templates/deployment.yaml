@@ -97,6 +97,26 @@ spec:
             - name: CRON_SCHEDULE
               value: {{ .Values.app.cronSchedule | quote }}
 
+            # --- CiviCRM security keys ---
+            - name: CIVICRM_SITE_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: civicrm-site-key
+                  optional: true
+            - name: CIVICRM_CRED_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: civicrm-cred-keys
+                  optional: true
+            - name: CIVICRM_SIGN_KEYS
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
+                  key: civicrm-sign-keys
+                  optional: true
+
           livenessProbe:
             httpGet:
               path: /
@@ -124,6 +144,10 @@ spec:
             - name: drupal-private
               mountPath: /opt/drupal/private
             {{- end }}
+            - name: civicrm-settings
+              mountPath: /opt/drupal/web/sites/default/civicrm.settings.php
+              subPath: civicrm.settings.php
+              readOnly: true
 
       volumes:
         {{- if .Values.persistence.sites.enabled }}
@@ -136,6 +160,10 @@ spec:
           persistentVolumeClaim:
             claimName: {{ include "civicrm-drupal.fullname" . }}-private
         {{- end }}
+        - name: civicrm-settings
+          configMap:
+            name: {{ include "civicrm-drupal.fullname" . }}-civicrm-settings
+            defaultMode: 0444
 
       {{- with .Values.nodeSelector }}
       nodeSelector:
