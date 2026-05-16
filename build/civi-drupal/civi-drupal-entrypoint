@@ -32,15 +32,6 @@ CIVICRM_EXTENSIONS="${CIVICRM_EXTENSIONS:-}"
 # --- Cron ---
 CRON_SCHEDULE="${CRON_SCHEDULE:-}"
 
-# --- CiviCRM security keys ---
-# These are generated on first install and must stay stable across restarts.
-# When running without a persistent volume, set them explicitly via ENV so they
-# survive container recreation. Leave empty on first install — they are generated
-# by cv and then extracted from civicrm.settings.php for logging.
-CIVICRM_SITE_KEY="${CIVICRM_SITE_KEY:-}"
-CIVICRM_CRED_KEYS="${CIVICRM_CRED_KEYS:-}"
-CIVICRM_SIGN_KEYS="${CIVICRM_SIGN_KEYS:-}"
-
 DRUPAL_ROOT="/opt/drupal"
 DRUPAL_SETTINGS="${DRUPAL_ROOT}/web/sites/default/settings.php"
 CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
@@ -70,15 +61,6 @@ wait_for_db() {
     echo "Database is ready."
 }
 
-# Extract a defined constant's value from civicrm.settings.php using PHP.
-extract_key() {
-    php -r "
-        define('CIVICRM_UF', 'Drupal8');
-        include '${CIVICRM_SETTINGS}';
-        echo defined('${1}') ? constant('${1}') : '';
-    " 2>/dev/null
-}
-
 write_settings_php() {
     chmod u+w "${DRUPAL_ROOT}/web/sites/default"
     cat > "${DRUPAL_SETTINGS}" << PHP
@@ -101,165 +83,11 @@ PHP
     chmod 0444 "${DRUPAL_SETTINGS}"
 }
 
-write_civicrm_settings_php() {
-    _site_key="${1}"
-    _cred_keys="${2}"
-    _sign_keys="${3}"
-    cat > "${CIVICRM_SETTINGS}" << PHP
-<?php
-global \$civicrm_root, \$civicrm_setting, \$civicrm_paths;
-
-if (!defined('CIVICRM_UF')) {
-  if (getenv('CIVICRM_UF')) {
-    define('CIVICRM_UF', getenv('CIVICRM_UF'));
-  } else {
-    define('CIVICRM_UF', 'Drupal8');
-  }
-}
-if (!defined('CIVICRM_UF_DSN') && CIVICRM_UF !== 'UnitTests') {
-  define('CIVICRM_UF_DSN', 'mysql://${DRUPAL_DB_USER}:${DRUPAL_DB_PASSWORD}@${DRUPAL_DB_HOST}:${DRUPAL_DB_PORT}/${DRUPAL_DB_NAME}?new_link=true');
-}
-\$civicrm_paths['civicrm.files']['url']  = '${DRUPAL_BASE_URL}/sites/default/files/civicrm';
-\$civicrm_paths['civicrm.files']['path'] = '/opt/drupal/web/sites/default/files/civicrm';
-\$civicrm_paths['civicrm.private']['path'] = '/opt/drupal/web/sites/default/files/civicrm';
-if (!defined('CIVICRM_DSN')) {
-  if (CIVICRM_UF === 'UnitTests') {
-    if (isset(\$GLOBALS['_CV']['TEST_DB_DSN'])) {
-      define('CIVICRM_DSN', \$GLOBALS['_CV']['TEST_DB_DSN']);
-    } else {
-      throw new \Exception('\$GLOBALS["_CV"]["TEST_DB_DSN"] is not set');
-    }
-  } else {
-    define('CIVICRM_DSN', 'mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}?new_link=true');
-  }
-}
-if (!defined('CIVICRM_LOGGING_DSN')) {
-  define('CIVICRM_LOGGING_DSN', CIVICRM_DSN);
-}
-\$civicrm_root = '/opt/drupal/vendor/civicrm/civicrm-core/';
-if (!defined('CIVICRM_TEMPLATE_COMPILEDIR')) {
-  define('CIVICRM_TEMPLATE_COMPILEDIR', '/opt/drupal/web/sites/default/files/civicrm/templates_c');
-}
-if (!defined('CIVICRM_UF_BASEURL')) {
-  define('CIVICRM_UF_BASEURL', '${DRUPAL_BASE_URL}');
-}
-if (!defined('CIVICRM_DEDUPE_OPTIMIZER')) {
-  define('CIVICRM_DEDUPE_OPTIMIZER', FALSE);
-}
-if (!defined('CIVICRM_SITE_KEY')) {
-  define('CIVICRM_SITE_KEY', '${_site_key}');
-}
-if (!defined('CIVICRM_CRED_KEYS')) {
-  define('_CIVICRM_CRED_KEYS', '${_cred_keys}');
-  define('CIVICRM_CRED_KEYS', _CIVICRM_CRED_KEYS === '%%' . 'credKeys' . '%%' ? '' : _CIVICRM_CRED_KEYS);
-}
-if (!defined('CIVICRM_DEPLOY_ID')) {
-  define('_CIVICRM_DEPLOY_ID', '${_site_key}');
-  define('CIVICRM_DEPLOY_ID', _CIVICRM_DEPLOY_ID === '%%' . 'deployID' . '%%' ? '' : _CIVICRM_DEPLOY_ID);
-}
-if (!defined('CIVICRM_SIGN_KEYS')) {
-  define('_CIVICRM_SIGN_KEYS', '${_sign_keys}');
-  define('CIVICRM_SIGN_KEYS', _CIVICRM_SIGN_KEYS === '%%' . 'signKeys' . '%%' ? '' : _CIVICRM_SIGN_KEYS);
-}
-if (!defined('CIVICRM_MAIL_SMARTY')) {
-  define('CIVICRM_MAIL_SMARTY', 0);
-}
-if (!defined('CIVICRM_DOMAIN_ID')) {
-  define('CIVICRM_DOMAIN_ID', 1);
-}
-if (!defined('CIVICRM_DB_CACHE_CLASS')) {
-  define('CIVICRM_DB_CACHE_CLASS', 'ArrayCache');
-}
-if (!defined('CIVICRM_DB_CACHE_HOST')) {
-  define('CIVICRM_DB_CACHE_HOST', 'localhost');
-}
-if (!defined('CIVICRM_DB_CACHE_PORT')) {
-  if (CIVICRM_DB_CACHE_CLASS === 'Redis') {
-    define('CIVICRM_DB_CACHE_PORT', 6379);
-  } else {
-    define('CIVICRM_DB_CACHE_PORT', 11211);
-  }
-}
-if (!defined('CIVICRM_DB_CACHE_PASSWORD')) {
-  define('CIVICRM_DB_CACHE_PASSWORD', '');
-}
-if (!defined('CIVICRM_DB_CACHE_TIMEOUT')) {
-  define('CIVICRM_DB_CACHE_TIMEOUT', 3600);
-}
-if (!defined('CIVICRM_DB_CACHE_PREFIX')) {
-  define('CIVICRM_DB_CACHE_PREFIX', '');
-}
-if (!defined('CIVICRM_PSR16_STRICT')) {
-  define('CIVICRM_PSR16_STRICT', FALSE);
-}
-define('CIVICRM_DEADLOCK_RETRIES', 3);
-if (CIVICRM_UF === 'UnitTests') {
-  if (!defined('CIVICRM_CONTAINER_CACHE')) define('CIVICRM_CONTAINER_CACHE', 'auto');
-}
-if (strtoupper(substr(PHP_OS, 0, 3)) !== 'WIN' && !defined('CIVICRM_EXCLUDE_DIRS_PATTERN')) {
-  define('CIVICRM_EXCLUDE_DIRS_PATTERN', '@/(\.|node_modules|js/|css/|bower_components|packages/|sites/default/files/private)@');
-}
-\$include_path = '.'           . PATH_SEPARATOR .
-                \$civicrm_root . PATH_SEPARATOR .
-                \$civicrm_root . DIRECTORY_SEPARATOR . 'packages' . PATH_SEPARATOR .
-                get_include_path();
-if (set_include_path(\$include_path) === false) {
-   echo "Could not set the include path<p>";
-   exit();
-}
-if (!defined('CIVICRM_CLEANURL')) {
-  if (function_exists('variable_get') && variable_get('clean_url', '0') != '0') {
-    define('CIVICRM_CLEANURL', 1);
-  } elseif (function_exists('config_get') && config_get('system.core', 'clean_url') != 0) {
-    define('CIVICRM_CLEANURL', 1);
-  } elseif (function_exists('get_option') && get_option('permalink_structure') != '') {
-    define('CIVICRM_CLEANURL', 1);
-  } else {
-    define('CIVICRM_CLEANURL', 0);
-  }
-}
-\$memLimitString = trim(ini_get('memory_limit'));
-\$memLimitUnit   = strtolower(substr(\$memLimitString, -1));
-\$memLimit       = (int) \$memLimitString;
-switch (\$memLimitUnit) {
-    case 'g': \$memLimit *= 1024;
-    case 'm': \$memLimit *= 1024;
-    case 'k': \$memLimit *= 1024;
-}
-if (\$memLimit >= 0 and \$memLimit < 134217728) {
-    ini_set('memory_limit', '128M');
-}
-require_once 'CRM/Core/ClassLoader.php';
-CRM_Core_ClassLoader::singleton()->register();
-PHP
-    chmod 0444 "${CIVICRM_SETTINGS}"
-}
-
-# Regenerate both settings files without touching the database.
-# Keys must be supplied via ENV or extracted from an existing civicrm.settings.php.
+# Regenerate settings.php without touching the database.
+# civicrm.settings.php is written by cv on first install and persisted on the volume.
 regenerate_settings() {
-    echo "Regenerating settings files from existing database..."
+    echo "Regenerating settings.php from existing database..."
     write_settings_php
-
-    # Resolve keys: prefer ENVs, then fall back to reading existing file (if any).
-    _site_key="${CIVICRM_SITE_KEY}"
-    _cred_keys="${CIVICRM_CRED_KEYS}"
-    _sign_keys="${CIVICRM_SIGN_KEYS}"
-
-    if [ -z "$_site_key" ] || [ -z "$_cred_keys" ] || [ -z "$_sign_keys" ]; then
-        echo "WARNING: CIVICRM_SITE_KEY / CIVICRM_CRED_KEYS / CIVICRM_SIGN_KEYS not set."
-        echo "         Keys will be regenerated — existing encrypted data and signed URLs"
-        echo "         may become invalid. Set these ENVs to ensure stability across restarts."
-        # Let cv regenerate — data loss risk is documented above.
-        (cd "${DRUPAL_ROOT}/web" && cv core:install \
-            --url="${DRUPAL_BASE_URL}" \
-            --db="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}" \
-            --settings-path="${CIVICRM_SETTINGS}" \
-            --keep --quiet 2>/dev/null) || true
-    else
-        write_civicrm_settings_php "$_site_key" "$_cred_keys" "$_sign_keys"
-    fi
-
     echo "Settings regenerated."
 }
 
@@ -279,39 +107,22 @@ install_drupal() {
 
 install_civicrm() {
     echo "Installing CiviCRM..."
-    # --keep: skip writing civicrm.settings.php if it already exists (e.g. mounted via ConfigMap).
-    # The DB schema is still initialised regardless.
+    # --keep skips writing civicrm.settings.php when it already exists (e.g. mounted read-only
+    # via a Kubernetes ConfigMap). The DB schema is still initialised in both cases.
+    _cv_keep=""
+    [ -f "${CIVICRM_SETTINGS}" ] && _cv_keep="--keep"
     (cd "${DRUPAL_ROOT}/web" && cv core:install \
         --url="${DRUPAL_BASE_URL}" \
         --db="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}" \
         --settings-path="${CIVICRM_SETTINGS}" \
-        --keep)
-
-    # Extract generated keys and print them so the operator can persist them via ENV.
-    _site_key="$(extract_key CIVICRM_SITE_KEY)"
-    _cred_keys="$(extract_key CIVICRM_CRED_KEYS)"
-    _sign_keys="$(extract_key CIVICRM_SIGN_KEYS)"
-    echo "---"
-    echo "CiviCRM installed. Persist these keys via ENV to survive restarts without a volume:"
-    echo "  CIVICRM_SITE_KEY=${_site_key}"
-    echo "  CIVICRM_CRED_KEYS=${_cred_keys}"
-    echo "  CIVICRM_SIGN_KEYS=${_sign_keys}"
-    echo "---"
-
+        ${_cv_keep})
     echo "Rebuilding Drupal cache..."
     $DRUSH --root="${DRUPAL_ROOT}/web" cache:rebuild
     echo "CiviCRM installed."
+}
 
-    # Warn if keys were not supplied via ENV — they are now only in civicrm.settings.php.
-    # When running without a persistent volume, set CIVICRM_SITE_KEY, CIVICRM_CRED_KEYS
-    # and CIVICRM_SIGN_KEYS so the container can regenerate the file on restart.
-    if [ -z "$CIVICRM_SITE_KEY" ] || [ -z "$CIVICRM_CRED_KEYS" ] || [ -z "$CIVICRM_SIGN_KEYS" ]; then
-        echo "WARNING: CiviCRM security keys were generated but not supplied via ENV."
-        echo "         Without a persistent volume for sites/default/, these keys will be"
-        echo "         regenerated on every restart, breaking encrypted data and signed URLs."
-        echo "         Read the keys from civicrm.settings.php and persist them via:"
-        echo "           CIVICRM_SITE_KEY, CIVICRM_CRED_KEYS, CIVICRM_SIGN_KEYS"
-    fi
+ensure_civicrm_enabled() {
+    $DRUSH --root="${DRUPAL_ROOT}/web" -l "${DRUPAL_BASE_URL}" pm:enable civicrm --yes 2>/dev/null || true
 }
 
 upgrade_civicrm() {
@@ -346,6 +157,7 @@ if [ "$AUTO_INSTALL" = "true" ]; then
             regenerate_settings
         fi
         echo "Already fully installed."
+        ensure_civicrm_enabled
         if [ "$AUTO_UPDATE" = "true" ]; then
             upgrade_civicrm
         fi
@@ -354,12 +166,14 @@ if [ "$AUTO_INSTALL" = "true" ]; then
         # Fresh install — neither DB nor settings exist.
         install_drupal
         install_civicrm
+        ensure_civicrm_enabled
         enable_extensions
     else
         # settings.php exists but DB is empty (e.g. DB was wiped).
         echo "Settings exist but database is empty — reinstalling..."
         install_drupal
         install_civicrm
+        ensure_civicrm_enabled
         enable_extensions
     fi
 else
@@ -367,7 +181,9 @@ else
 fi
 
 echo "Fixing file permissions..."
-chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default"
+chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default" 2>/dev/null || \
+    find "${DRUPAL_ROOT}/web/sites/default" -not -name "civicrm.settings.php" \
+        -exec chown www-data:www-data {} + 2>/dev/null || true
 
 # --- Cron setup ---
 if [ -n "$CRON_SCHEDULE" ]; then
