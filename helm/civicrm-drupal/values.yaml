@@ -163,6 +163,15 @@ cronjob:
 mariadb:
   enabled: true
 
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/mariadb
+    tag: latest
+
+  global:
+    security:
+      allowInsecureImages: true
+
   auth:
     rootPassword: "rootchangeme"
     database: drupal
