@@ -77,8 +77,9 @@ COPY --from=build --chown=www-data:www-data /opt/drupal /opt/drupal
 COPY civi-drupal-entrypoint /usr/local/bin/
 RUN chmod +x /usr/local/bin/civi-drupal-entrypoint
 
-# CiviCRM needs more memory than the PHP default (128M) during install and runtime
-RUN echo "memory_limit = 512M" > /usr/local/etc/php/conf.d/civicrm-memory.ini
+# CiviCRM needs more memory than the PHP default (128M) during install and runtime.
+# zend.assertions=-1 disables PHP 8.4 assert.active deprecation warnings in production.
+RUN printf "memory_limit = 512M\nzend.assertions = -1\n" > /usr/local/etc/php/conf.d/civicrm.ini
 
 ENV CIVICRM_UF=Drupal8
 

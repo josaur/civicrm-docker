@@ -30,14 +30,20 @@ AUTO_UPDATE="${AUTO_UPDATE:-true}"
 CIVICRM_EXTENSIONS="${CIVICRM_EXTENSIONS:-}"
 
 # --- Cron ---
-# Set to a crontab schedule expression to enable in-container cron, e.g. "*/15 * * * *"
-# Leave empty (default) to disable — use an external scheduler instead.
 CRON_SCHEDULE="${CRON_SCHEDULE:-}"
 
 DRUPAL_ROOT="/opt/drupal"
 DRUPAL_SETTINGS="${DRUPAL_ROOT}/web/sites/default/settings.php"
 CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
 DRUSH="${DRUPAL_ROOT}/vendor/bin/drush"
+
+drupal_db_ready() {
+    php -r "
+        \$pdo = new PDO('mysql:host=${DRUPAL_DB_HOST};port=${DRUPAL_DB_PORT};dbname=${DRUPAL_DB_NAME}', '${DRUPAL_DB_USER}', '${DRUPAL_DB_PASSWORD}');
+        \$r = \$pdo->query(\"SHOW TABLES LIKE 'users'\");
+        exit(\$r && \$r->rowCount() > 0 ? 0 : 1);
+    " 2>/dev/null
+}
 
 civicrm_db_ready() {
     php -r "
@@ -53,6 +59,36 @@ wait_for_db() {
         sleep 2
     done
     echo "Database is ready."
+}
+
+write_settings_php() {
+    chmod u+w "${DRUPAL_ROOT}/web/sites/default"
+    cat > "${DRUPAL_SETTINGS}" << PHP
+<?php
+\$databases['default']['default'] = [
+  'database'        => '${DRUPAL_DB_NAME}',
+  'username'        => '${DRUPAL_DB_USER}',
+  'password'        => '${DRUPAL_DB_PASSWORD}',
+  'host'            => '${DRUPAL_DB_HOST}',
+  'port'            => '${DRUPAL_DB_PORT}',
+  'driver'          => 'mysql',
+  'prefix'          => '',
+  'isolation_level' => 'READ COMMITTED',
+  'namespace'       => 'Drupal\\\\mysql\\\\Driver\\\\Database\\\\mysql',
+  'autoload'        => 'core/modules/mysql/src/Driver/Database/mysql/',
+];
+\$settings['config_sync_directory'] = 'sites/default/files/config/sync';
+\$settings['hash_salt'] = '${DRUPAL_DB_NAME}-${DRUPAL_DB_HOST}-civicrm-docker';
+PHP
+    chmod 0444 "${DRUPAL_SETTINGS}"
+}
+
+# Regenerate settings.php without touching the database.
+# civicrm.settings.php is written by cv on first install and persisted on the volume.
+regenerate_settings() {
+    echo "Regenerating settings.php from existing database..."
+    write_settings_php
+    echo "Settings regenerated."
 }
 
 install_drupal() {
@@ -71,14 +107,22 @@ install_drupal() {
 
 install_civicrm() {
     echo "Installing CiviCRM..."
-    # cv detects the Drupal root from CWD; pass settings path explicitly for reliability
+    # --keep skips writing civicrm.settings.php when it already exists (e.g. mounted read-only
+    # via a Kubernetes ConfigMap). The DB schema is still initialised in both cases.
+    _cv_keep=""
+    [ -f "${CIVICRM_SETTINGS}" ] && _cv_keep="--keep"
     (cd "${DRUPAL_ROOT}/web" && cv core:install \
         --url="${DRUPAL_BASE_URL}" \
         --db="mysql://${CIVICRM_DB_USER}:${CIVICRM_DB_PASSWORD}@${CIVICRM_DB_HOST}:${CIVICRM_DB_PORT}/${CIVICRM_DB_NAME}" \
-        --settings-path="${CIVICRM_SETTINGS}")
+        --settings-path="${CIVICRM_SETTINGS}" \
+        ${_cv_keep})
     echo "Rebuilding Drupal cache..."
     $DRUSH --root="${DRUPAL_ROOT}/web" cache:rebuild
     echo "CiviCRM installed."
+}
+
+ensure_civicrm_enabled() {
+    $DRUSH --root="${DRUPAL_ROOT}/web" -l "${DRUPAL_BASE_URL}" pm:enable civicrm --yes 2>/dev/null || true
 }
 
 upgrade_civicrm() {
@@ -91,8 +135,6 @@ upgrade_civicrm() {
 enable_extensions() {
     [ -z "$CIVICRM_EXTENSIONS" ] && return
     echo "Enabling CiviCRM extensions: ${CIVICRM_EXTENSIONS}"
-    # Process each extension individually: try cv dl first (downloads + enables if not local),
-    # fall back to cv en for extensions already present in the filesystem.
     echo "$CIVICRM_EXTENSIONS" | tr ',' '\n' | while read -r ext; do
         ext=$(echo "$ext" | tr -d ' ')
         [ -z "$ext" ] && continue
@@ -109,20 +151,29 @@ enable_extensions() {
 if [ "$AUTO_INSTALL" = "true" ]; then
     wait_for_db
 
-    if [ ! -f "$DRUPAL_SETTINGS" ]; then
-        install_drupal
-        install_civicrm
-        enable_extensions
-    elif ! civicrm_db_ready; then
-        # Drupal installed but CiviCRM DB tables missing (e.g. previous install crashed)
-        echo "Drupal installed, CiviCRM DB not ready — (re)installing CiviCRM..."
-        install_civicrm
-        enable_extensions
-    else
+    if drupal_db_ready; then
+        if [ ! -f "$DRUPAL_SETTINGS" ]; then
+            # DB populated, settings missing — regenerate without touching the DB.
+            regenerate_settings
+        fi
         echo "Already fully installed."
+        ensure_civicrm_enabled
         if [ "$AUTO_UPDATE" = "true" ]; then
             upgrade_civicrm
         fi
+        enable_extensions
+    elif [ ! -f "$DRUPAL_SETTINGS" ]; then
+        # Fresh install — neither DB nor settings exist.
+        install_drupal
+        install_civicrm
+        ensure_civicrm_enabled
+        enable_extensions
+    else
+        # settings.php exists but DB is empty (e.g. DB was wiped).
+        echo "Settings exist but database is empty — reinstalling..."
+        install_drupal
+        install_civicrm
+        ensure_civicrm_enabled
         enable_extensions
     fi
 else
@@ -130,13 +181,13 @@ else
 fi
 
 echo "Fixing file permissions..."
-chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default"
+chown -R www-data:www-data "${DRUPAL_ROOT}/web/sites/default" 2>/dev/null || \
+    find "${DRUPAL_ROOT}/web/sites/default" -not -name "civicrm.settings.php" \
+        -exec chown www-data:www-data {} + 2>/dev/null || true
 
 # --- Cron setup ---
 if [ -n "$CRON_SCHEDULE" ]; then
     echo "Installing cron schedule: ${CRON_SCHEDULE}"
-    # /etc/cron.d/ files are picked up automatically by cron — no crontab call needed.
-    # Redirect output to PID 1 so jobs appear in docker logs.
     printf 'SHELL=/bin/sh\nPATH=/usr/local/sbin:/usr/local/bin:/sbin:/bin:/usr/sbin:/usr/bin\n' \
         > /etc/cron.d/civicrm-drupal
     printf '%s www-data %s --root=%s/web cron --quiet\n' \

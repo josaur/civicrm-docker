@@ -51,9 +51,9 @@ ingress:
 # Persistent storage
 # -------------------------------------------------------------------
 persistence:
-  # Mounts the entire sites/default/ directory — contains settings.php,
-  # civicrm.settings.php, and the files/ subdirectory. Must be persisted
-  # so config survives container restarts.
+  # Mounts sites/default/files/ — user uploads, CiviCRM files, Drupal cache.
+  # settings.php is written by the entrypoint; civicrm.settings.php is served
+  # from the ConfigMap. Neither needs to be on the PVC.
   sites:
     enabled: true
     storageClass: ""
@@ -79,6 +79,32 @@ app:
   # Leave empty to disable. Mutually exclusive with cronjob.enabled.
   # Example: "*/15 * * * *"
   cronSchedule: ""
+
+  # CiviCRM security keys — must stay stable across container restarts.
+  # On first install CiviCRM generates them automatically and writes them to
+  # civicrm.settings.php. Read them from there and set them here so they
+  # survive pod recreation without a persistent volume.
+  #
+  # Without these, CIVICRM_CRED_KEYS rotates on every restart and all
+  # stored encrypted values (SMTP passwords, API tokens, etc.) become unreadable.
+  # CIVICRM_SIGN_KEYS rotation invalidates all active JWT tokens and signed URLs.
+  #
+  # How to generate fresh keys (e.g. for a new installation):
+  #
+  #   CIVICRM_SITE_KEY:
+  #     Base64-alphanum encoded 32 random bytes (no padding, only [a-zA-Z0-9]).
+  #     php -r "echo preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(32))).PHP_EOL;"
+  #
+  #   CIVICRM_CRED_KEYS:
+  #     Prefix "aes-cbc:hkdf-sha256:" + base64-alphanum of 37 random bytes.
+  #     php -r "echo 'aes-cbc:hkdf-sha256:'.preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(37))).PHP_EOL;"
+  #
+  #   CIVICRM_SIGN_KEYS:
+  #     Prefix "jwt-hs256:hkdf-sha256:" + base64-alphanum of 40 random bytes.
+  #     php -r "echo 'jwt-hs256:hkdf-sha256:'.preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(40))).PHP_EOL;"
+  civicrmSiteKey: ""
+  civicrmCredKeys: ""
+  civicrmSignKeys: ""
 
   drupal:
     siteName: "CiviCRM"
@@ -136,6 +162,15 @@ cronjob:
 # -------------------------------------------------------------------
 mariadb:
   enabled: true
+
+  image:
+    registry: docker.io
+    repository: bitnamilegacy/mariadb
+    tag: latest
+
+  global:
+    security:
+      allowInsecureImages: true
 
   auth:
     rootPassword: "rootchangeme"
