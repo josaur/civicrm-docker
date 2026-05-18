@@ -25,6 +25,30 @@ nodeSelector: {}
 tolerations: []
 affinity: {}
 
+# Startup probe gates liveness/readiness until Apache is up.
+# periodSeconds * failureThreshold = maximum startup time allowed.
+# 10s * 60 = 10 minutes — enough for a cold Drupal + CiviCRM install.
+startupProbe:
+  httpGet:
+    path: /
+    port: http
+  periodSeconds: 10
+  failureThreshold: 60
+
+livenessProbe:
+  httpGet:
+    path: /
+    port: http
+  periodSeconds: 30
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /
+    port: http
+  periodSeconds: 10
+  failureThreshold: 3
+
 # -------------------------------------------------------------------
 # Service
 # -------------------------------------------------------------------
