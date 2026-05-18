@@ -9,10 +9,14 @@ on:
       chart_version:
         description: "Chart version to publish (e.g. 0.1.0)"
         required: true
+      image_tag:
+        description: "Image tag to pin (leave empty to auto-resolve from :main digest)"
+        required: false
 
 env:
   REGISTRY: ghcr.io
   CHART_PATH: helm/civicrm-drupal
+  IMAGE: ghcr.io/${{ github.repository_owner }}/civicrm-docker-drupal
 
 jobs:
   lint:
@@ -23,9 +27,6 @@ jobs:
       - uses: azure/setup-helm@v4
         with:
           version: "latest"
-
-      - name: Add Bitnami repo (needed for dependency lint)
-        run: helm repo add bitnami https://charts.bitnami.com/bitnami
 
       - name: Build chart dependencies
         run: helm dependency build ${{ env.CHART_PATH }}
@@ -47,6 +48,25 @@ jobs:
         with:
           version: "latest"
 
+      - name: Install crane
+        uses: imjasonh/setup-crane@v0.4
+
+      - name: Resolve image tag
+        id: image
+        run: |
+          if [ -n "${{ inputs.image_tag }}" ]; then
+            TAG="${{ inputs.image_tag }}"
+          else
+            # Resolve the digest of :main → convert to sha-<short> tag.
+            # docker/metadata-action pushes sha-<7-char-sha> alongside :main,
+            # so this pins the chart to the exact immutable image build.
+            DIGEST=$(crane digest ${{ env.IMAGE }}:main)
+            SHORT_SHA=$(echo "$DIGEST" | sed 's/sha256://' | cut -c1-7)
+            TAG="sha-${SHORT_SHA}"
+          fi
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Pinning image tag: ${TAG}"
+
       - name: Resolve chart version
         id: version
         run: |
@@ -56,6 +76,11 @@ jobs:
             # strip "helm/v" prefix from tag name
             echo "chart_version=${GITHUB_REF_NAME#helm/v}" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Set appVersion in Chart.yaml
+        run: |
+          sed -i 's/^appVersion:.*$/appVersion: "${{ steps.image.outputs.tag }}"/' \
+            ${{ env.CHART_PATH }}/Chart.yaml
 
       - name: Build chart dependencies
         run: helm dependency build ${{ env.CHART_PATH }}

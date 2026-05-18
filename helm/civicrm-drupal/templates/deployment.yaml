@@ -1,11 +1,15 @@
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: {{ include "civicrm-drupal.fullname" . }}
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  # OrderedReady ensures each pod is Ready before the next starts.
+  # This prevents concurrent AUTO_INSTALL runs against the same database.
+  podManagementPolicy: OrderedReady
+  serviceName: {{ include "civicrm-drupal.fullname" . }}-headless
   selector:
     matchLabels:
       {{- include "civicrm-drupal.selectorLabels" . | nindent 6 }}
@@ -117,20 +121,12 @@ spec:
                   key: civicrm-sign-keys
                   optional: true
 
+          startupProbe:
+            {{- toYaml .Values.startupProbe | nindent 12 }}
           livenessProbe:
-            httpGet:
-              path: /
-              port: http
-            initialDelaySeconds: 120
-            periodSeconds: 30
-            failureThreshold: 10
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
-            httpGet:
-              path: /
-              port: http
-            initialDelaySeconds: 60
-            periodSeconds: 10
-            failureThreshold: 30
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
 
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
@@ -150,16 +146,6 @@ spec:
               readOnly: true
 
       volumes:
-        {{- if .Values.persistence.sites.enabled }}
-        - name: drupal-sites
-          persistentVolumeClaim:
-            claimName: {{ include "civicrm-drupal.fullname" . }}-sites
-        {{- end }}
-        {{- if .Values.persistence.private.enabled }}
-        - name: drupal-private
-          persistentVolumeClaim:
-            claimName: {{ include "civicrm-drupal.fullname" . }}-private
-        {{- end }}
         - name: civicrm-settings
           configMap:
             name: {{ include "civicrm-drupal.fullname" . }}-civicrm-settings
@@ -177,3 +163,33 @@ spec:
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+
+  {{- if or .Values.persistence.sites.enabled .Values.persistence.private.enabled }}
+  volumeClaimTemplates:
+    {{- if .Values.persistence.sites.enabled }}
+    - metadata:
+        name: drupal-sites
+      spec:
+        accessModes:
+          - {{ .Values.persistence.sites.accessMode }}
+        {{- if .Values.persistence.sites.storageClass }}
+        storageClassName: {{ .Values.persistence.sites.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.sites.size }}
+    {{- end }}
+    {{- if .Values.persistence.private.enabled }}
+    - metadata:
+        name: drupal-private
+      spec:
+        accessModes:
+          - {{ .Values.persistence.private.accessMode }}
+        {{- if .Values.persistence.private.storageClass }}
+        storageClassName: {{ .Values.persistence.private.storageClass }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.persistence.private.size }}
+    {{- end }}
+  {{- end }}

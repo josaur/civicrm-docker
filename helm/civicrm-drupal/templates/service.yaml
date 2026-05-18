@@ -13,3 +13,20 @@ spec:
       name: http
   selector:
     {{- include "civicrm-drupal.selectorLabels" . | nindent 4 }}
+---
+# Headless service required by StatefulSet for stable pod DNS names.
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}-headless
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+spec:
+  clusterIP: None
+  ports:
+    - port: {{ .Values.service.port }}
+      targetPort: http
+      protocol: TCP
+      name: http
+  selector:
+    {{- include "civicrm-drupal.selectorLabels" . | nindent 4 }}
