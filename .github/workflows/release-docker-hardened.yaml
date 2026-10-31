@@ -1,0 +1,86 @@
+name: build-hardened
+
+# Builds and publishes the hardened image (build/civi-drupal-hardened).
+# Tags: branch name, version tags (v*.*.*), sha-<short commit>. Signed with cosign.
+
+on:
+  push:
+    branches: [ "*" ]
+    tags: [ 'v*.*.*' ]
+    paths:
+      - "build/civi-drupal-hardened/**"
+      - ".github/workflows/release-docker-hardened.yaml"
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - "build/civi-drupal-hardened/**"
+      - ".github/workflows/release-docker-hardened.yaml"
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  build-civicrm-drupal-hardened:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.6.0
+        with:
+          cosign-release: 'v2.4.0'
+
+      - name: Setup Docker buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ github.repository }}-drupal-hardened
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha
+
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@v6
+        with:
+          context: ./build/civi-drupal-hardened
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha,scope=civi-drupal-hardened
+          cache-to: type=gha,mode=max,scope=civi-drupal-hardened
+
+      - name: Sign the published Docker image
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: echo "${TAGS}" | xargs -I {} cosign sign --yes {}@${DIGEST}
+
+      - name: Summary
+        if: ${{ github.event_name != 'pull_request' }}
+        env:
+          DIGEST: ${{ steps.build-and-push.outputs.digest }}
+        run: |
+          echo "Image digest: ${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
+          echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"
