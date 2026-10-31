@@ -1,6 +1,8 @@
 name: build-hardened
 
-# Builds and publishes the hardened image (build/civi-drupal-hardened).
+# Builds and publishes the two hardened images (build/civi-drupal-hardened):
+#   runtime  ghcr.io/<repo>-drupal-hardened  distroless, serves traffic
+#   tools    ghcr.io/<repo>-drupal-tools     shell and tools, for the init container, cron and one-off jobs
 # Tags: branch name, version tags (v*.*.*), sha-<short commit>. Signed with cosign.
 
 on:
@@ -21,7 +23,16 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
-  build-civicrm-drupal-hardened:
+  build:
+    name: build (${{ matrix.target }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: runtime
+            suffix: -drupal-hardened
+          - target: tools
+            suffix: -drupal-tools
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -52,7 +63,7 @@ jobs:
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ${{ env.REGISTRY }}/${{ github.repository }}-drupal-hardened
+          images: ${{ env.REGISTRY }}/${{ github.repository }}${{ matrix.suffix }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -64,11 +75,12 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: ./build/civi-drupal-hardened
+          target: ${{ matrix.target }}
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha,scope=civi-drupal-hardened
-          cache-to: type=gha,mode=max,scope=civi-drupal-hardened
+          cache-from: type=gha,scope=civi-drupal-hardened-${{ matrix.target }}
+          cache-to: type=gha,mode=max,scope=civi-drupal-hardened-${{ matrix.target }}
 
       - name: Sign the published Docker image
         if: ${{ github.event_name != 'pull_request' }}
@@ -82,5 +94,6 @@ jobs:
         env:
           DIGEST: ${{ steps.build-and-push.outputs.digest }}
         run: |
+          echo "### ${{ matrix.target }}" >> "$GITHUB_STEP_SUMMARY"
           echo "Image digest: ${DIGEST}" >> "$GITHUB_STEP_SUMMARY"
           echo "${{ steps.meta.outputs.tags }}" | sed 's/^/- /' >> "$GITHUB_STEP_SUMMARY"

@@ -43,14 +43,12 @@ spec:
                     matchLabels:
                       {{- include "civicrm-drupal.selectorLabels" . | nindent 22 }}
           {{- end }}
-          {{- if .Values.extensions }}
           initContainers:
-            {{- include "civicrm-drupal.extensionsInitContainer" . | nindent 12 }}
-          {{- end }}
+            {{- include "civicrm-drupal.initContainer" . | nindent 12 }}
           containers:
             - name: cron
-              image: {{ include "civicrm-drupal.image" . | quote }}
-              imagePullPolicy: {{ .Values.image.pullPolicy }}
+              image: {{ include "civicrm-drupal.toolsImage" . | quote }}
+              imagePullPolicy: {{ .Values.toolsImage.pullPolicy }}
               securityContext:
                 {{- toYaml .Values.securityContext | nindent 16 }}
               # Bypass the web entrypoint: only the cron commands.

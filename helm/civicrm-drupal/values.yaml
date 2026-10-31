@@ -1,6 +1,9 @@
-# Chart for the image built from build/civi-drupal-hardened.
-# The image is immutable: the root filesystem is read-only, only /tmp (memory) and /data (volume) are writable.
-# All configuration comes from environment variables; nothing secret is stored in the image or the chart.
+# Chart for the images built from build/civi-drupal-hardened (two images in different privilege levels):
+#   image       runtime, distroless: Apache + mod_php + the application. No shell, no tools. The long-running container.
+#   toolsImage  with shell, curl, unzip, mariadb client, php CLI, cv, drush. Used by the init container (directories, extension
+#               download) and the CronJob. Never serves traffic.
+# Both are immutable: the root filesystem is read-only, only /tmp (memory) and /data (volume) are writable.
+# All configuration comes from environment variables or mounted files; nothing secret is stored in an image or the chart.
 
 # -------------------------------------------------------------------
 # Image
@@ -11,6 +14,12 @@ image:
   # Pin the exact build: sha256:... (takes precedence over the tag content, the tag stays for readability)
   digest: ""
   # Always is cheap with a digest and guarantees the node does not run a stale image
+  pullPolicy: Always
+
+toolsImage:
+  repository: ghcr.io/josaur/civicrm-docker-drupal-tools
+  tag: ""          # defaults to .Chart.AppVersion
+  digest: ""
   pullPolicy: Always
 
 imagePullSecrets: []
@@ -212,8 +221,9 @@ extensions: []
   #   url: https://example.com/releases/org.example.myextension-1.0.0.zip
   #   sha256: "0000000000000000000000000000000000000000000000000000000000000000"
 
-extensionsInit:
-  sizeLimit: 256Mi
+# Init container (tools image): creates the writable directories in /tmp and /data, downloads the extensions
+init:
+  extensionsSizeLimit: 256Mi
   resources:
     requests:
       cpu: 10m

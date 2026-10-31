@@ -32,16 +32,37 @@ docker build --build-arg DRUPAL_VERSION=11.4.11 --build-arg CIVICRM_VERSION=6.19
 
 The base image tag (`drupal:11.4.11-php8.5-apache-trixie`) can lag behind the latest Drupal release; the Dockerfile raises core to `DRUPAL_VERSION` with Composer.
 
+## Images
+
+Two images in different privilege levels are built from this Dockerfile (`--target`):
+
+| | `runtime` (`...-drupal-hardened`) | `tools` (`...-drupal-tools`) |
+|---|---|---|
+| Base | distroless (`gcr.io/distroless/base-debian13`) | `php:8.5-apache` |
+| Contains | Apache + mod_php, Drupal, CiviCRM | shell, curl, unzip, MariaDB client, php CLI, `cv`, `drush` |
+| Shell, package manager, Composer | none | shell yes; no package manager, no Composer, no compilers |
+| Purpose | serves traffic (the long-running container) | init container, CronJob, one-off jobs (install, upgrade) |
+
+The runtime image has no shell, so everything that needs one runs in the tools image: `/opt/tools/init.sh` creates the writable
+directories in `/tmp` and `/data` and installs extensions (init container), `drush`/`cv` run in jobs. Both run as an unprivileged
+user (default UID 10033) with a read-only root filesystem.
+
 ## Run
 
 ```sh
+# 1. Prepare /tmp and /data (init step, tools image); /tmp is a volume shared with the next step
+docker run --rm --read-only --user 10033:10033 --cap-drop=ALL --security-opt no-new-privileges \
+  -v civi-tmp:/tmp -v civi-data:/data civi-drupal-tools sh /opt/tools/init.sh
+
+# 2. Start the application (runtime image)
 docker run -d --name civi \
   --read-only --user 10033:10033 --cap-drop=ALL --security-opt no-new-privileges \
-  --tmpfs /tmp:rw,nosuid,nodev,noexec,size=512m \
-  -v civi-data:/data:U \
+  -v civi-tmp:/tmp -v civi-data:/data \
   --env-file civi.env \
   -p 8080:8080 civi-drupal-hardened
 ```
+
+With Kubernetes the Helm chart does this (init container, the same volumes).
 
 ### Environment variables
 

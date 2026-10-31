@@ -46,6 +46,16 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
 {{- end }}
 
+{{/* Tools image (init container, cron): repository:tag, or repository:tag@sha256:... when toolsImage.digest is set. */}}
+{{- define "civicrm-drupal.toolsImage" -}}
+{{- $tag := .Values.toolsImage.tag | default .Chart.AppVersion }}
+{{- if .Values.toolsImage.digest }}
+{{- printf "%s:%s@%s" .Values.toolsImage.repository $tag .Values.toolsImage.digest }}
+{{- else }}
+{{- printf "%s:%s" .Values.toolsImage.repository $tag }}
+{{- end }}
+{{- end }}
+
 {{- define "civicrm-drupal.secretName" -}}
 {{- required "app.existingSecret is required (the chart does not create secrets)" .Values.app.existingSecret }}
 {{- end }}
@@ -123,33 +133,40 @@ the Secret is mounted as files and the image reads them from CIVI_MOUNT_DIR.
 Extensions: the Helm values define which CiviCRM extensions exist. An init container downloads them into an
 emptyDir that is mounted read-only into the application (never into the data volume: no PHP runs there).
 */}}
-{{- define "civicrm-drupal.extensionsEnabled" -}}
-{{- if .Values.extensions }}true{{- end }}
-{{- end }}
-
-{{- define "civicrm-drupal.extensionsInitContainer" -}}
-- name: fetch-extensions
-  image: {{ include "civicrm-drupal.image" . | quote }}
-  imagePullPolicy: {{ .Values.image.pullPolicy }}
-  command: ["sh", "/opt/tools/fetch-extensions.sh", "/config/extensions.list", "/ext"]
+{{/* Init container (tools image): always present, it prepares /tmp and /data for the shell-less runtime image. */}}
+{{- define "civicrm-drupal.initContainer" -}}
+- name: prepare
+  image: {{ include "civicrm-drupal.toolsImage" . | quote }}
+  imagePullPolicy: {{ .Values.toolsImage.pullPolicy }}
+  {{- if .Values.extensions }}
+  command: ["sh", "/opt/tools/init.sh", "/config/extensions.list", "/ext"]
+  {{- else }}
+  command: ["sh", "/opt/tools/init.sh"]
+  {{- end }}
   securityContext:
     {{- toYaml .Values.securityContext | nindent 4 }}
   resources:
-    {{- toYaml .Values.extensionsInit.resources | nindent 4 }}
+    {{- toYaml .Values.init.resources | nindent 4 }}
   volumeMounts:
-    - name: extensions
-      mountPath: /ext
     - name: tmp
       mountPath: /tmp
+    {{- if .Values.persistence.enabled }}
+    - name: data
+      mountPath: /data
+    {{- end }}
+    {{- if .Values.extensions }}
+    - name: extensions
+      mountPath: /ext
     - name: extensions-list
       mountPath: /config
       readOnly: true
+    {{- end }}
 {{- end }}
 
 {{- define "civicrm-drupal.extensionsVolumes" -}}
 - name: extensions
   emptyDir:
-    sizeLimit: {{ .Values.extensionsInit.sizeLimit }}
+    sizeLimit: {{ .Values.init.extensionsSizeLimit }}
 - name: extensions-list
   configMap:
     name: {{ include "civicrm-drupal.fullname" . }}-extensions

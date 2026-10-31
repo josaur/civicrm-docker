@@ -1,7 +1,8 @@
 # civicrm-drupal Helm chart
 
-CiviCRM on Drupal 11 for the image built from [`build/civi-drupal-hardened`](../../build/civi-drupal-hardened):
-immutable, read-only root filesystem, unprivileged user, no capabilities. The chart expects an **external
+CiviCRM on Drupal 11 for the images built from [`build/civi-drupal-hardened`](../../build/civi-drupal-hardened), in two privilege levels:
+`image` (distroless runtime, no shell, serves traffic) and `toolsImage` (shell and tools, for the init container and the CronJob).
+Immutable, read-only root filesystem, unprivileged user, no capabilities. The chart expects an **external
 MariaDB** and an **existing Secret**. It never creates secrets and has no database sub-chart.
 
 ## What the chart sets
@@ -14,7 +15,8 @@ MariaDB** and an **existing Secret**. It never creates secrets and has no databa
 | Secrets | the Secret is mounted read-only as files at `/run/civi-secrets`, not as environment variables |
 | Network | `NetworkPolicy` (default deny, DNS, database, HTTPS, SMTP), restrict the sources with `networkPolicy.ingressFrom` |
 | Resources | requests and limits (CPU and memory) for every container, including init and cron |
-| Image | pin with `image.digest`, pull policy `Always` |
+| Images | `image` (distroless, no shell) and `toolsImage` (init container, CronJob), both pinned with `.digest`, pull policy `Always` |
+| Init container | `prepare` (tools image) creates the writable directories in `/tmp` and `/data` and downloads the extensions |
 | Extensions | defined in the values, fetched by an init container, mounted read-only |
 
 ## Install
@@ -54,7 +56,7 @@ extensions:
     sha256: "<sha256 of the zip>"
 ```
 
-An init container (same image, same security context) runs `/opt/tools/fetch-extensions.sh`: https only, SHA-256
+The init container `prepare` (tools image, same security context) runs `/opt/tools/init.sh`, which calls `/opt/tools/fetch-extensions.sh`: https only, SHA-256
 verified, name checked against `info.xml`, any error stops the pod from starting. The files are mounted read-only
 at `web/sites/default/ext`. This is deliberately **not** below `/data`, where PHP does not run. Enable an extension
 once with `cv ext:enable <key>`. The CronJob gets the same extensions.

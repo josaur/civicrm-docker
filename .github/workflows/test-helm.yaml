@@ -15,10 +15,11 @@ on:
   workflow_dispatch:
 
 env:
-  IMAGE: civi-drupal-hardened:ci
+  RUNTIME_IMAGE: civi-drupal-runtime:ci
+  TOOLS_IMAGE: civi-drupal-tools:ci
   CHART: helm/civicrm-drupal
   NAMESPACE: civicrm-test
-  # Real, small extension used to test the extension init container
+  # Real, small extension used to test the extension download in the init container
   EXT_KEY: org.civicrm.recentmenu
   EXT_URL: https://github.com/civicrm/org.civicrm.recentmenu/archive/1.7.zip
   EXT_SHA256: a9c32a62f8bf588c3ee8a68a649ac5bc1b0c3da7396b3c9a34b42e0ba94a9e1b
@@ -45,6 +46,7 @@ jobs:
         run: |
           cat > /tmp/values.yaml <<'EOF'
           image: {repository: ghcr.io/example/civicrm, tag: "1", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001"}
+          toolsImage: {repository: ghcr.io/example/civicrm-tools, tag: "1", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000002"}
           app: {baseUrl: "https://civi.example.org", trustedHosts: [civi.example.org], existingSecret: civi-app, drupalDb: {host: db}}
           ingress: {enabled: true, host: civi.example.org, tls: [{secretName: civi-tls, hosts: [civi.example.org]}]}
           cronjob: {enabled: true}
@@ -69,8 +71,9 @@ jobs:
             -f /w/render.yaml --framework kubernetes --compact --quiet
 
   # ---------------------------------------------------------------
-  # Deployment test in kind: install, extension init container,
-  # privileges, secrets as files, web, CronJob, NetworkPolicy object
+  # Deployment test in kind with both images: install, init container
+  # (directories, extension download), privileges, distroless runtime,
+  # secrets as files, web, CronJob
   # ---------------------------------------------------------------
   deploy:
     runs-on: ubuntu-latest
@@ -79,21 +82,34 @@ jobs:
 
       - uses: docker/setup-buildx-action@v3
 
-      - name: Build image
+      - name: Build runtime image (distroless)
         uses: docker/build-push-action@v6
         with:
           context: build/civi-drupal-hardened
-          tags: ${{ env.IMAGE }}
+          target: runtime
+          tags: ${{ env.RUNTIME_IMAGE }}
           load: true
-          cache-from: type=gha,scope=civi-drupal-hardened
-          cache-to: type=gha,mode=max,scope=civi-drupal-hardened
+          cache-from: type=gha,scope=civi-drupal-hardened-runtime
+          cache-to: type=gha,mode=max,scope=civi-drupal-hardened-runtime
+
+      - name: Build tools image
+        uses: docker/build-push-action@v6
+        with:
+          context: build/civi-drupal-hardened
+          target: tools
+          tags: ${{ env.TOOLS_IMAGE }}
+          load: true
+          cache-from: type=gha,scope=civi-drupal-hardened-tools
+          cache-to: type=gha,mode=max,scope=civi-drupal-hardened-tools
 
       - uses: helm/kind-action@v1
         with:
           cluster_name: kind
 
-      - name: Load image into kind
-        run: kind load docker-image ${{ env.IMAGE }} --name kind
+      - name: Load images into kind
+        run: |
+          kind load docker-image ${{ env.RUNTIME_IMAGE }} --name kind
+          kind load docker-image ${{ env.TOOLS_IMAGE }} --name kind
 
       - uses: azure/setup-helm@v4
         with:
@@ -115,7 +131,7 @@ jobs:
             --from-literal=civicrm-cred-keys="aes-cbc:hkdf-sha256:$(openssl rand -base64 32)" \
             --from-literal=civicrm-sign-keys="jwt-hs256:hkdf-sha256:$(openssl rand -base64 32)"
 
-      - name: Install Drupal (one-off pod with the same security settings)
+      - name: Install Drupal (one-off pod, tools image, same security settings)
         run: |
           cat <<'EOF' | kubectl -n ${{ env.NAMESPACE }} apply -f -
           apiVersion: v1
@@ -132,7 +148,7 @@ jobs:
             securityContext: {runAsNonRoot: true, runAsUser: 10033, runAsGroup: 10033, fsGroup: 10033, seccompProfile: {type: RuntimeDefault}}
             containers:
               - name: tools
-                image: civi-drupal-hardened:ci
+                image: civi-drupal-tools:ci
                 imagePullPolicy: Never
                 command: ["sleep", "1800"]
                 securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
@@ -160,7 +176,8 @@ jobs:
       - name: Install chart (extension, CronJob, NetworkPolicy)
         run: |
           helm install civi ${{ env.CHART }} -n ${{ env.NAMESPACE }} --wait --timeout 10m \
-            --set image.repository=civi-drupal-hardened --set image.tag=ci --set image.pullPolicy=Never \
+            --set image.repository=civi-drupal-runtime --set image.tag=ci --set image.pullPolicy=Never \
+            --set toolsImage.repository=civi-drupal-tools --set toolsImage.tag=ci --set toolsImage.pullPolicy=Never \
             --set persistence.size=1Gi \
             --set app.existingSecret=civi-app --set app.drupalDb.host=db \
             --set app.baseUrl=http://localhost:8080 --set 'app.trustedHosts={localhost}' \
@@ -170,38 +187,40 @@ jobs:
             --set cronjob.enabled=true --set 'cronjob.schedule=* * * * *'
           kubectl -n ${{ env.NAMESPACE }} get pods,networkpolicy
 
-      - name: Privileges (user, capabilities, read-only)
+      - name: Privileges and distroless runtime
         run: |
-          P=civi-civicrm-drupal-0
-          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
-          X sh -c 'grep -E "^(Uid|CapEff|CapBnd|NoNewPrivs):" /proc/1/status'
-          X sh -c 'grep -q "^Uid:.10033" /proc/1/status'
-          X sh -c 'grep -q "^CapEff:.0000000000000000" /proc/1/status'
-          X sh -c 'grep -q "^CapBnd:.0000000000000000" /proc/1/status'
-          X sh -c 'grep -q "^NoNewPrivs:.1" /proc/1/status'
-          ! X sh -c 'touch /etc/x /opt/drupal/web/x /opt/drupal/web/sites/default/ext/x' 2>/dev/null
-          X sh -c 'touch /data/ok /tmp/ok'
-          # No secrets in the environment, no service account token
-          ! X env | grep -E '^(DRUPAL_DB_PASSWORD|DRUPAL_HASH_SALT|CIVICRM_SITE_KEY|CIVICRM_CRED_KEYS|CIVICRM_SIGN_KEYS)='
-          ! X sh -c 'test -e /var/run/secrets/kubernetes.io/serviceaccount/token'
+          NS=${{ env.NAMESPACE }}; P=civi-civicrm-drupal-0
+          J() { kubectl -n $NS get pod $P -o jsonpath="$1"; }
+          test "$(J '{.spec.securityContext.runAsUser}')" = 10033
+          test "$(J '{.spec.securityContext.runAsNonRoot}')" = true
+          test "$(J '{.spec.automountServiceAccountToken}')" = false
+          test "$(J '{.spec.containers[?(@.name=="drupal")].securityContext.readOnlyRootFilesystem}')" = true
+          test "$(J '{.spec.containers[?(@.name=="drupal")].securityContext.allowPrivilegeEscalation}')" = false
+          test "$(J '{.spec.containers[?(@.name=="drupal")].securityContext.capabilities.drop[0]}')" = ALL
+          # runtime image: no shell, no tools; images are the two expected ones
+          test "$(J '{.spec.containers[?(@.name=="drupal")].image}')" = "civi-drupal-runtime:ci"
+          test "$(J '{.spec.initContainers[?(@.name=="prepare")].image}')" = "civi-drupal-tools:ci"
+          ! kubectl -n $NS exec $P -c drupal -- /bin/sh -c true 2>/dev/null
+          # secrets are files, not environment variables
+          test -z "$(J '{.spec.containers[?(@.name=="drupal")].env[?(@.name=="DRUPAL_DB_PASSWORD")].name}')"
+          test -z "$(J '{.spec.containers[?(@.name=="drupal")].env[?(@.name=="DRUPAL_HASH_SALT")].name}')"
 
-      - name: Extension is in place, read-only, and can be enabled
+      - name: Init container prepared the directories and the extension
         run: |
-          P=civi-civicrm-drupal-0
-          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
-          X test -f /opt/drupal/web/sites/default/ext/${{ env.EXT_KEY }}/info.xml
-          X sh -c 'cd /opt/drupal/web && cv ext:enable ${{ env.EXT_KEY }}'
-          X sh -c 'cd /opt/drupal/web && cv ext:list -L | grep ${{ env.EXT_KEY }} | grep -q installed'
+          kubectl -n ${{ env.NAMESPACE }} logs civi-civicrm-drupal-0 -c prepare | tee /dev/stderr | grep -q "1 extension(s) installed"
 
-      - name: Web
+      - name: Web (from a pod with the tools image)
         run: |
-          P=civi-civicrm-drupal-0
-          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
-          code() { X curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost' "http://127.0.0.1:8080$1"; }
+          NS=${{ env.NAMESPACE }}
+          kubectl -n $NS run web-test --image=civi-drupal-tools:ci --image-pull-policy=Never --restart=Never -- sleep 900
+          kubectl -n $NS wait --for=condition=Ready pod/web-test --timeout=120s
+          code() { kubectl -n $NS exec web-test -- curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost' "http://civi-civicrm-drupal.$NS.svc.cluster.local$1"; }
           test "$(code /)" = 200
           test "$(code /user/login)" = 200
           test "$(code /sites/default/settings.php)" = 403
           test "$(code /update.php)" = 403
+          test "$(code /core/install.php)" = 403
+          test "$(code /composer.json)" = 403
           test "$(code /sites/default/ext/${{ env.EXT_KEY }}/js/recentmenu.js)" = 200
 
       - name: CronJob runs
