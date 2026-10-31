@@ -30,7 +30,7 @@ docker build -t civi-drupal-hardened build/civi-drupal-hardened
 docker build --build-arg DRUPAL_VERSION=11.4.11 --build-arg CIVICRM_VERSION=6.19.2 ...
 ```
 
-The base image tag (`drupal:11.4.10-php8.5-apache-trixie`) can lag behind the latest Drupal release; the Dockerfile raises core to `DRUPAL_VERSION` with Composer.
+The base image tag (`drupal:11.4.11-php8.5-apache-trixie`) can lag behind the latest Drupal release; the Dockerfile raises core to `DRUPAL_VERSION` with Composer.
 
 ## Run
 

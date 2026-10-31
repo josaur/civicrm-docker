@@ -6,7 +6,7 @@
 #     --tmpfs /tmp -v civi-data:/data -p 8080:8080 --env-file civi.env <image>
 #
 # See README.md for the required environment variables.
-ARG DRUPAL_IMAGE=drupal:11.4.10-php8.5-apache-trixie
+ARG DRUPAL_IMAGE=drupal:11.4.11-php8.5-apache-trixie
 FROM ${DRUPAL_IMAGE}
 
 # Raise Drupal core / pin CiviCRM. The base image tag may lag behind the latest core release.
