@@ -215,6 +215,20 @@ cronjob:
       memory: 768Mi
 
 # -------------------------------------------------------------------
+# Additional volumes (list of volume / volumeMount entries) for the application and the CronJob container, for example a ConfigMap
+# with a Drupal module that is not part of the image (deployment specific code or configuration stays out of the image).
+# Mount read-only. The pod must be restarted after a change (compiled code is cached).
+# -------------------------------------------------------------------
+extraVolumes: []
+  # - name: my-module
+  #   configMap:
+  #     name: my-module
+extraVolumeMounts: []
+  # - name: my-module
+  #   mountPath: /opt/drupal/web/modules/custom/my_module
+  #   readOnly: true
+
+# -------------------------------------------------------------------
 # CiviCRM extensions
 # An init container downloads the listed extensions into an emptyDir that is mounted read-only
 # at web/sites/default/ext (the extensions directory of the image). Nothing is installed at runtime

@@ -79,6 +79,9 @@ spec:
                 {{- if .Values.extensions }}
                 {{- include "civicrm-drupal.extensionsMount" . | nindent 16 }}
                 {{- end }}
+                {{- with .Values.extraVolumeMounts }}
+                {{- toYaml . | nindent 16 }}
+                {{- end }}
           volumes:
             - name: tmp
               emptyDir:
@@ -95,5 +98,8 @@ spec:
             {{- end }}
             {{- if .Values.extensions }}
             {{- include "civicrm-drupal.extensionsVolumes" . | nindent 12 }}
+            {{- end }}
+            {{- with .Values.extraVolumes }}
+            {{- toYaml . | nindent 12 }}
             {{- end }}
 {{- end }}
