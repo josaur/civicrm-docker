@@ -163,18 +163,29 @@ COPY --from=distro / /distro
 COPY build-scripts/closure.sh /closure.sh
 RUN sh /closure.sh
 
+# Assemble the complete runtime root here (a shell is available) and set the permissions explicitly. Doing this with COPY --chmod
+# in the distroless stage is not portable: BuildKit applies the mode to the parent directories it creates as well.
+COPY --from=build /opt/drupal /rootfs/opt/drupal
+COPY rootfs/opt/drupal/web/sites/default/settings.php rootfs/opt/drupal/web/sites/default/civicrm.settings.php /rootfs/opt/drupal/web/sites/default/
+COPY rootfs/usr/local/etc/php/conf.d/zz-civi.ini /rootfs/usr/local/etc/php/conf.d/zz-civi.ini
+COPY runtime/etc/apache2-civi/httpd.conf /rootfs/etc/apache2-civi/httpd.conf
+COPY rootfs/etc/apache2/conf-available/zz-civi-hardening.conf /rootfs/etc/apache2-civi/conf/zz-civi-hardening.conf
+RUN set -eux; \
+    chown -R root:root /rootfs; \
+    chmod a-w /rootfs/opt/drupal/web/sites/default/settings.php /rootfs/opt/drupal/web/sites/default/civicrm.settings.php; \
+    chmod 0444 /rootfs/opt/drupal/web/sites/default/settings.php /rootfs/opt/drupal/web/sites/default/civicrm.settings.php \
+      /rootfs/usr/local/etc/php/conf.d/zz-civi.ini /rootfs/etc/apache2-civi/httpd.conf /rootfs/etc/apache2-civi/conf/zz-civi-hardening.conf; \
+    find /rootfs/etc/apache2-civi -type d -exec chmod 0555 {} +; \
+    # everything the runtime reads must be readable and traversable for any unprivileged user
+    find /rootfs -type d ! -perm -005 -exec chmod a+rx {} +; \
+    find /rootfs -type f ! -perm -004 -exec chmod a+r {} +
+
 # ---------------------------------------------------------------------------------------------------------------------
 # Stage 4: runtime (distroless: no shell, no package manager)
 # ---------------------------------------------------------------------------------------------------------------------
 FROM ${DISTROLESS_IMAGE} AS runtime
 
 COPY --from=closure /rootfs/ /
-COPY --from=build /opt/drupal /opt/drupal
-COPY --chmod=0444 rootfs/opt/drupal/web/sites/default/settings.php /opt/drupal/web/sites/default/settings.php
-COPY --chmod=0444 rootfs/opt/drupal/web/sites/default/civicrm.settings.php /opt/drupal/web/sites/default/civicrm.settings.php
-COPY --chmod=0444 rootfs/usr/local/etc/php/conf.d/zz-civi.ini /usr/local/etc/php/conf.d/zz-civi.ini
-COPY --chmod=0444 runtime/etc/apache2-civi/httpd.conf /etc/apache2-civi/httpd.conf
-COPY --chmod=0444 rootfs/etc/apache2/conf-available/zz-civi-hardening.conf /etc/apache2-civi/conf/zz-civi-hardening.conf
 
 STOPSIGNAL SIGWINCH
 WORKDIR /opt/drupal
