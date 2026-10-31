@@ -124,6 +124,12 @@ jobs:
             --env=MARIADB_USER=drupal --env=MARIADB_PASSWORD=$DBPW --port=3306 --expose \
             -- --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
           kubectl -n ${{ env.NAMESPACE }} wait --for=condition=Ready pod/db --timeout=180s
+          # The pod has no readiness probe: wait until MariaDB really accepts connections
+          for i in $(seq 1 60); do
+            kubectl -n ${{ env.NAMESPACE }} exec db -- healthcheck.sh --connect --innodb_initialized >/dev/null 2>&1 && break
+            sleep 3
+          done
+          kubectl -n ${{ env.NAMESPACE }} exec db -- healthcheck.sh --connect --innodb_initialized
           kubectl -n ${{ env.NAMESPACE }} create secret generic civi-app \
             --from-literal=drupal-db-password="$DBPW" \
             --from-literal=drupal-hash-salt="$(openssl rand -hex 32)" \
