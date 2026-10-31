@@ -43,6 +43,7 @@ RUN composer config --no-plugins allow-plugins.civicrm/composer-compile-plugin t
       "civicrm/civicrm-packages:${CIVICRM_VERSION}" \
       "civicrm/civicrm-drupal-8:${CIVICRM_VERSION}" \
       "drush/drush" \
+      "drupal/openid_connect:^1.6" \
  && composer clear-cache
 
 # cv (CiviCRM CLI) for upgrades and operations

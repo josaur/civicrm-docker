@@ -63,6 +63,7 @@ wins over a file. Files keep secrets out of the container environment.
 | `CIVICRM_DEPLOY_ID` | no | |
 | `CIVICRM_DB_HOST` / `_PORT` / `_NAME` / `_USER` / `_PASSWORD` *(secret)* | no | use a separate CiviCRM database |
 | `CIVI_MOUNT_DIR` | no | directory with secret files, see above |
+| `OIDC_CLIENT_ID`, `OIDC_CLIENT_SECRET` *(secret)* | no | credentials of the OpenID Connect client (see below) |
 
 ### Kubernetes
 
@@ -112,6 +113,14 @@ The image contains `cv`, `drush` and the MariaDB client, so an existing CiviCRM 
 - **Create Drupal users.** The mapping to CiviCRM contacts is rebuilt on first login (by e-mail).
 - **Remove registrations of extensions that are not available.** `cv upgrade:db` stops with `Invalid extension key` if the database lists an extension that is not in the image or in the extensions directory. Delete its row from `civicrm_extension` (the data tables stay), or provide the extension as described in [Extensions](#extensions), and run the upgrade again.
 - Set up cron: `cv api job.execute` (for example as a Kubernetes CronJob using this image).
+
+## OpenID Connect login
+
+The image contains the Drupal module `openid_connect` (generic client, callback `/openid-connect/generic`). It is not enabled by
+default. To use an identity provider, enable it and store the endpoints as configuration (`openid_connect.settings.generic`); the
+client credentials are read from `OIDC_CLIENT_ID` / `OIDC_CLIENT_SECRET` (environment or files in `CIVI_MOUNT_DIR`) and override the
+stored values in `settings.php`, so they never end up in the database or in exported configuration. Typical settings:
+`connect_existing_users: true` (match by e-mail) and `override_registration_settings: false` (unknown people do not get an account).
 
 ## Extensions
 

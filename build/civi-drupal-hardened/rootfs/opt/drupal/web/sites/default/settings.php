@@ -72,3 +72,13 @@ $settings['reverse_proxy_addresses'] = array_filter(array_map('trim', explode(',
 
 // Do not show errors to visitors.
 $config['system.logging']['error_level'] = 'hide';
+
+// OpenID Connect login (module openid_connect 8.x-1.x, generic client, redirect /openid-connect/generic). The endpoints are
+// configuration; the credentials come from OIDC_CLIENT_ID / OIDC_CLIENT_SECRET (environment or files in CIVI_MOUNT_DIR)
+// and override the stored values, so they never end up in the database or in exported configuration.
+$oidcClientId = $drupalSecret('OIDC_CLIENT_ID');
+$oidcClientSecret = $drupalSecret('OIDC_CLIENT_SECRET');
+if ($oidcClientId !== '' && $oidcClientSecret !== '') {
+  $config['openid_connect.settings.generic']['settings']['client_id'] = $oidcClientId;
+  $config['openid_connect.settings.generic']['settings']['client_secret'] = $oidcClientSecret;
+}
