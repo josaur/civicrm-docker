@@ -1,9 +1,9 @@
 apiVersion: v2
 name: civicrm-drupal
-description: CiviCRM on Drupal — includes optional MariaDB, Ingress and persistent volumes
+description: CiviCRM on Drupal 11 (immutable, read-only root filesystem, non-root). Expects an external MariaDB and an existing Secret.
 type: application
-version: 0.1.0
-appVersion: "6.10.1"
+version: 0.2.0
+appVersion: "main"
 keywords:
   - civicrm
   - drupal
@@ -12,9 +12,4 @@ sources:
   - https://github.com/josaur/civicrm-docker
 maintainers:
   - name: josaur
-    email: claude@josaur.de
-dependencies:
-  - name: mariadb
-    version: "20.x.x"
-    repository: "oci://registry-1.docker.io/bitnamicharts"
-    condition: mariadb.enabled
+    email: github@josaur.de

@@ -1,0 +1,23 @@
+{{- if .Values.extensions }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}-extensions
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+data:
+  extensions.list: |
+    {{- range .Values.extensions }}
+    {{- if not (regexMatch "^[A-Za-z0-9._-]+$" (required "extensions[].key is required" .key)) }}
+    {{- fail (printf "extension key %q contains invalid characters" .key) }}
+    {{- end }}
+    {{- if not (regexMatch "^https://[^ ]+$" (required (printf "extensions[%s].url is required" .key) .url)) }}
+    {{- fail (printf "extension %s: url must start with https:// and contain no spaces" .key) }}
+    {{- end }}
+    {{- if not (regexMatch "^[0-9a-f]{64}$" (required (printf "extensions[%s].sha256 is required" .key) .sha256)) }}
+    {{- fail (printf "extension %s: sha256 must be 64 lowercase hex characters" .key) }}
+    {{- end }}
+    {{ .key }} {{ .url }} {{ .sha256 }}
+    {{- end }}
+{{- end }}

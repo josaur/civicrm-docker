@@ -1,1 +1,0 @@
-{{- /* PVCs are managed by the StatefulSet volumeClaimTemplates */ -}}

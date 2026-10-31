@@ -4,26 +4,75 @@ on:
   pull_request:
     paths:
       - "helm/**"
-      - "build/civi-drupal/**"
+      - "build/civi-drupal-hardened/**"
       - ".github/workflows/test-helm.yaml"
   push:
     branches:
       - main
     paths:
       - "helm/**"
-      - "build/civi-drupal/**"
+      - "build/civi-drupal-hardened/**"
   workflow_dispatch:
 
 env:
-  IMAGE: civicrm-drupal:ci
+  IMAGE: civi-drupal-hardened:ci
   CHART: helm/civicrm-drupal
   NAMESPACE: civicrm-test
+  # Real, small extension used to test the extension init container
+  EXT_KEY: org.civicrm.recentmenu
+  EXT_URL: https://github.com/civicrm/org.civicrm.recentmenu/archive/1.7.zip
+  EXT_SHA256: a9c32a62f8bf588c3ee8a68a649ac5bc1b0c3da7396b3c9a34b42e0ba94a9e1b
 
 jobs:
   # ---------------------------------------------------------------
-  # Build the app image once and share it across test jobs
+  # Static checks: lint, schema, best practices
   # ---------------------------------------------------------------
-  build-image:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: azure/setup-helm@v4
+        with:
+          version: latest
+
+      - name: helm lint
+        run: |
+          helm lint ${{ env.CHART }} --strict \
+            --set app.existingSecret=s --set app.drupalDb.host=db
+
+      - name: Render with all features enabled
+        run: |
+          cat > /tmp/values.yaml <<'EOF'
+          image: {repository: ghcr.io/example/civicrm, tag: "1", digest: "sha256:0000000000000000000000000000000000000000000000000000000000000001"}
+          app: {baseUrl: "https://civi.example.org", trustedHosts: [civi.example.org], existingSecret: civi-app, drupalDb: {host: db}}
+          ingress: {enabled: true, host: civi.example.org, tls: [{secretName: civi-tls, hosts: [civi.example.org]}]}
+          cronjob: {enabled: true}
+          extensions:
+            - {key: "${{ env.EXT_KEY }}", url: "${{ env.EXT_URL }}", sha256: "${{ env.EXT_SHA256 }}"}
+          EOF
+          helm template civi ${{ env.CHART }} -n civi -f /tmp/values.yaml > /tmp/render.yaml
+
+      - name: kubeconform (strict)
+        run: |
+          docker run --rm -v /tmp:/w ghcr.io/yannh/kubeconform:latest \
+            -strict -summary -kubernetes-version 1.30.0 /w/render.yaml
+
+      - name: kube-linter
+        uses: stackrox/kube-linter-action@v1
+        with:
+          directory: /tmp/render.yaml
+
+      - name: checkov
+        run: |
+          docker run --rm -v /tmp:/w docker.io/bridgecrew/checkov:latest \
+            -f /w/render.yaml --framework kubernetes --compact --quiet
+
+  # ---------------------------------------------------------------
+  # Deployment test in kind: install, extension init container,
+  # privileges, secrets as files, web, CronJob, NetworkPolicy object
+  # ---------------------------------------------------------------
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,247 +82,141 @@ jobs:
       - name: Build image
         uses: docker/build-push-action@v6
         with:
-          context: build/civi-drupal
+          context: build/civi-drupal-hardened
           tags: ${{ env.IMAGE }}
-          outputs: type=docker,dest=/tmp/app-image.tar
-          cache-from: type=gha,scope=civi-drupal
-          cache-to: type=gha,mode=max,scope=civi-drupal
-
-      - uses: actions/upload-artifact@v4
-        with:
-          name: app-image
-          path: /tmp/app-image.tar
-          retention-days: 1
-
-  # ---------------------------------------------------------------
-  # Scenario 1: install without persistence + pod restart
-  # ---------------------------------------------------------------
-  test-no-persistence:
-    needs: build-image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: app-image
-          path: /tmp
+          load: true
+          cache-from: type=gha,scope=civi-drupal-hardened
+          cache-to: type=gha,mode=max,scope=civi-drupal-hardened
 
       - uses: helm/kind-action@v1
         with:
           cluster_name: kind
 
       - name: Load image into kind
-        run: kind load image-archive /tmp/app-image.tar --name kind
+        run: kind load docker-image ${{ env.IMAGE }} --name kind
 
       - uses: azure/setup-helm@v4
         with:
           version: latest
 
-      - name: Build chart dependencies
-        run: helm dependency build ${{ env.CHART }}
-
-      - name: Install chart (no persistence)
+      - name: Database and Secret
         run: |
-          helm install civicrm ${{ env.CHART }} \
-            --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
-            --wait --timeout 10m \
-            --set image.repository=civicrm-drupal \
-            --set image.tag=ci \
-            --set image.pullPolicy=Never \
-            --set persistence.sites.enabled=false \
-            --set persistence.private.enabled=false \
-            --set mariadb.primary.persistence.enabled=false
+          kubectl create namespace ${{ env.NAMESPACE }}
+          DBPW=$(openssl rand -hex 12)
+          kubectl -n ${{ env.NAMESPACE }} run db --image=docker.io/library/mariadb:11 \
+            --env=MARIADB_ROOT_PASSWORD=$(openssl rand -hex 12) --env=MARIADB_DATABASE=drupal \
+            --env=MARIADB_USER=drupal --env=MARIADB_PASSWORD=$DBPW --port=3306 --expose \
+            -- --character-set-server=utf8mb4 --collation-server=utf8mb4_general_ci
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=Ready pod/db --timeout=180s
+          kubectl -n ${{ env.NAMESPACE }} create secret generic civi-app \
+            --from-literal=drupal-db-password="$DBPW" \
+            --from-literal=drupal-hash-salt="$(openssl rand -hex 32)" \
+            --from-literal=civicrm-site-key="$(openssl rand -hex 16)" \
+            --from-literal=civicrm-cred-keys="aes-cbc:hkdf-sha256:$(openssl rand -base64 32)" \
+            --from-literal=civicrm-sign-keys="jwt-hs256:hkdf-sha256:$(openssl rand -base64 32)"
 
-      - name: Verify CiviCRM API responds
+      - name: Install Drupal (one-off pod with the same security settings)
         run: |
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
-            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+          cat <<'EOF' | kubectl -n ${{ env.NAMESPACE }} apply -f -
+          apiVersion: v1
+          kind: PersistentVolumeClaim
+          metadata: {name: data-civi-civicrm-drupal-0}
+          spec: {accessModes: [ReadWriteOnce], resources: {requests: {storage: 1Gi}}}
+          ---
+          apiVersion: v1
+          kind: Pod
+          metadata: {name: tools}
+          spec:
+            automountServiceAccountToken: false
+            restartPolicy: Never
+            securityContext: {runAsNonRoot: true, runAsUser: 10033, runAsGroup: 10033, fsGroup: 10033, seccompProfile: {type: RuntimeDefault}}
+            containers:
+              - name: tools
+                image: civi-drupal-hardened:ci
+                imagePullPolicy: Never
+                command: ["sleep", "1800"]
+                securityContext: {runAsNonRoot: true, readOnlyRootFilesystem: true, allowPrivilegeEscalation: false, capabilities: {drop: [ALL]}}
+                env:
+                  - {name: DRUPAL_DB_HOST, value: db}
+                  - {name: DRUPAL_DB_NAME, value: drupal}
+                  - {name: DRUPAL_DB_USER, value: drupal}
+                  - {name: CIVI_MOUNT_DIR, value: /run/civi-secrets}
+                  - {name: DRUPAL_TRUSTED_HOSTS, value: localhost}
+                  - {name: CIVICRM_BASE_URL, value: "http://localhost:8080"}
+                volumeMounts: [{name: tmp, mountPath: /tmp}, {name: data, mountPath: /data}, {name: secrets, mountPath: /run/civi-secrets, readOnly: true}]
+            volumes:
+              - {name: tmp, emptyDir: {medium: Memory, sizeLimit: 512Mi}}
+              - {name: data, persistentVolumeClaim: {claimName: data-civi-civicrm-drupal-0}}
+              - {name: secrets, secret: {secretName: civi-app, defaultMode: 0440}}
+          EOF
+          kubectl -n ${{ env.NAMESPACE }} wait --for=condition=Ready pod/tools --timeout=180s
+          EP=/usr/local/bin/civi-entrypoint.sh
+          kubectl -n ${{ env.NAMESPACE }} exec tools -- $EP drush site:install standard -y \
+            --account-name=admin --account-pass="$(openssl rand -hex 12)" --site-name=Civi
+          # Enabling the module installs the CiviCRM schema on a fresh database
+          kubectl -n ${{ env.NAMESPACE }} exec tools -- $EP drush -l http://localhost:8080 en civicrm -y
+          kubectl -n ${{ env.NAMESPACE }} delete pod tools --wait=true
 
-      - name: Delete pod (simulate restart)
+      - name: Install chart (extension, CronJob, NetworkPolicy)
         run: |
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl delete pod -n ${{ env.NAMESPACE }} $POD
-          kubectl rollout status deployment/civicrm-civicrm-drupal \
-            -n ${{ env.NAMESPACE }} --timeout=10m
+          helm install civi ${{ env.CHART }} -n ${{ env.NAMESPACE }} --wait --timeout 10m \
+            --set image.repository=civi-drupal-hardened --set image.tag=ci --set image.pullPolicy=Never \
+            --set persistence.size=1Gi \
+            --set app.existingSecret=civi-app --set app.drupalDb.host=db \
+            --set app.baseUrl=http://localhost:8080 --set 'app.trustedHosts={localhost}' \
+            --set 'extensions[0].key=${{ env.EXT_KEY }}' \
+            --set 'extensions[0].url=${{ env.EXT_URL }}' \
+            --set 'extensions[0].sha256=${{ env.EXT_SHA256 }}' \
+            --set cronjob.enabled=true --set 'cronjob.schedule=* * * * *'
+          kubectl -n ${{ env.NAMESPACE }} get pods,networkpolicy
 
-      - name: Verify CiviCRM still works after restart
+      - name: Privileges (user, capabilities, read-only)
         run: |
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
-            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
+          P=civi-civicrm-drupal-0
+          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
+          X sh -c 'grep -E "^(Uid|CapEff|CapBnd|NoNewPrivs):" /proc/1/status'
+          X sh -c 'grep -q "^Uid:.10033" /proc/1/status'
+          X sh -c 'grep -q "^CapEff:.0000000000000000" /proc/1/status'
+          X sh -c 'grep -q "^CapBnd:.0000000000000000" /proc/1/status'
+          X sh -c 'grep -q "^NoNewPrivs:.1" /proc/1/status'
+          ! X sh -c 'touch /etc/x /opt/drupal/web/x /opt/drupal/web/sites/default/ext/x' 2>/dev/null
+          X sh -c 'touch /data/ok /tmp/ok'
+          # No secrets in the environment, no service account token
+          ! X env | grep -E '^(DRUPAL_DB_PASSWORD|DRUPAL_HASH_SALT|CIVICRM_SITE_KEY|CIVICRM_CRED_KEYS|CIVICRM_SIGN_KEYS)='
+          ! X sh -c 'test -e /var/run/secrets/kubernetes.io/serviceaccount/token'
 
-      - name: Debug on failure
-        if: failure()
+      - name: Extension is in place, read-only, and can be enabled
         run: |
-          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
-          kubectl describe pods -n ${{ env.NAMESPACE }}
-          kubectl logs -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal --tail=80 || true
+          P=civi-civicrm-drupal-0
+          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
+          X test -f /opt/drupal/web/sites/default/ext/${{ env.EXT_KEY }}/info.xml
+          X sh -c 'cd /opt/drupal/web && cv ext:enable ${{ env.EXT_KEY }}'
+          X sh -c 'cd /opt/drupal/web && cv ext:list -L | grep ${{ env.EXT_KEY }} | grep -q installed'
 
-  # ---------------------------------------------------------------
-  # Scenario 2: install with persistence + pod restart
-  # ---------------------------------------------------------------
-  test-with-persistence:
-    needs: build-image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: app-image
-          path: /tmp
-
-      - uses: helm/kind-action@v1
-        with:
-          cluster_name: kind
-
-      - name: Load image into kind
-        run: kind load image-archive /tmp/app-image.tar --name kind
-
-      - uses: azure/setup-helm@v4
-        with:
-          version: latest
-
-      - name: Build chart dependencies
-        run: helm dependency build ${{ env.CHART }}
-
-      - name: Install chart (with persistence)
+      - name: Web
         run: |
-          helm install civicrm ${{ env.CHART }} \
-            --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
-            --wait --timeout 15m \
-            --set image.repository=civicrm-drupal \
-            --set image.tag=ci \
-            --set image.pullPolicy=Never \
-            --set persistence.sites.enabled=true \
-            --set persistence.sites.size=1Gi \
-            --set persistence.private.enabled=true \
-            --set persistence.private.size=500Mi \
-            --set mariadb.primary.persistence.enabled=true \
-            --set mariadb.primary.persistence.size=2Gi
+          P=civi-civicrm-drupal-0
+          X() { kubectl -n ${{ env.NAMESPACE }} exec $P -c drupal -- "$@"; }
+          code() { X curl -s -o /dev/null -w '%{http_code}' -H 'Host: localhost' "http://127.0.0.1:8080$1"; }
+          test "$(code /)" = 200
+          test "$(code /user/login)" = 200
+          test "$(code /sites/default/settings.php)" = 403
+          test "$(code /update.php)" = 403
+          test "$(code /sites/default/ext/${{ env.EXT_KEY }}/js/recentmenu.js)" = 200
 
-      - name: Verify CiviCRM API responds
+      - name: CronJob runs
         run: |
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
-            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
-
-      - name: Delete pod and verify data survives
-        run: |
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl delete pod -n ${{ env.NAMESPACE }} $POD
-          kubectl rollout status deployment/civicrm-civicrm-drupal \
-            -n ${{ env.NAMESPACE }} --timeout=10m
-          POD=$(kubectl get pod -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl exec -n ${{ env.NAMESPACE }} $POD -- \
-            sh -c "cd /opt/drupal/web && cv api4 Contact.get +s id +l 1" | grep '"id"'
-
-      - name: Debug on failure
-        if: failure()
-        run: |
-          kubectl get pods -n ${{ env.NAMESPACE }} -o wide
-          kubectl describe pods -n ${{ env.NAMESPACE }}
-          kubectl logs -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/name=civicrm-drupal --tail=80 || true
-
-  # ---------------------------------------------------------------
-  # Scenario 3: Kubernetes CronJob executes successfully
-  # ---------------------------------------------------------------
-  test-cronjob:
-    needs: build-image
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/download-artifact@v4
-        with:
-          name: app-image
-          path: /tmp
-
-      - uses: helm/kind-action@v1
-        with:
-          cluster_name: kind
-
-      - name: Load image into kind
-        run: kind load image-archive /tmp/app-image.tar --name kind
-
-      - uses: azure/setup-helm@v4
-        with:
-          version: latest
-
-      - name: Build chart dependencies
-        run: helm dependency build ${{ env.CHART }}
-
-      - name: Install chart with CronJob enabled
-        run: |
-          helm install civicrm ${{ env.CHART }} \
-            --namespace ${{ env.NAMESPACE }} \
-            --create-namespace \
-            --wait --timeout 10m \
-            --set image.repository=civicrm-drupal \
-            --set image.tag=ci \
-            --set image.pullPolicy=Never \
-            --set persistence.sites.enabled=false \
-            --set persistence.private.enabled=false \
-            --set mariadb.primary.persistence.enabled=false \
-            --set cronjob.enabled=true \
-            --set "cronjob.schedule=* * * * *"
-
-      - name: Wait for CronJob to trigger a Job (max 7m30s)
-        run: |
-          for i in $(seq 1 90); do
-            JOB=$(kubectl get jobs -n ${{ env.NAMESPACE }} \
-              -l app.kubernetes.io/component=cron \
+          for i in $(seq 1 60); do
+            JOB=$(kubectl -n ${{ env.NAMESPACE }} get jobs -l app.kubernetes.io/component=cron \
               -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
-            if [ -n "$JOB" ]; then
-              echo "Job created: $JOB"
-              break
-            fi
-            sleep 5
+            [ -n "$JOB" ] && break; sleep 5
           done
-          if [ -z "$JOB" ]; then
-            echo "ERROR: no CronJob-triggered Job appeared within 7m30s"
-            kubectl get cronjob -n ${{ env.NAMESPACE }}
-            exit 1
-          fi
-
-      - name: Wait for Job to complete
-        run: |
-          JOB=$(kubectl get jobs -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/component=cron \
-            -o jsonpath='{.items[0].metadata.name}')
-          kubectl wait job/$JOB \
-            -n ${{ env.NAMESPACE }} \
-            --for=condition=complete \
-            --timeout=5m
-
-      - name: Show cron job logs
-        run: |
-          kubectl logs -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/component=cron \
-            --tail=50
+          kubectl -n ${{ env.NAMESPACE }} wait job/$JOB --for=condition=complete --timeout=300s
+          kubectl -n ${{ env.NAMESPACE }} logs -l app.kubernetes.io/component=cron --all-containers --tail=30
 
       - name: Debug on failure
         if: failure()
         run: |
-          kubectl get pods,jobs,cronjobs -n ${{ env.NAMESPACE }} -o wide
-          kubectl describe jobs -n ${{ env.NAMESPACE }} || true
-          kubectl logs -n ${{ env.NAMESPACE }} \
-            -l app.kubernetes.io/component=cron --tail=80 || true
+          kubectl -n ${{ env.NAMESPACE }} get pods,jobs,cronjobs,pvc -o wide
+          kubectl -n ${{ env.NAMESPACE }} describe pods
+          kubectl -n ${{ env.NAMESPACE }} logs civi-civicrm-drupal-0 --all-containers --tail=80 || true

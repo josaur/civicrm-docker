@@ -3,6 +3,7 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: {{ include "civicrm-drupal.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}

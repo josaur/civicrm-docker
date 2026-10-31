@@ -3,6 +3,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: {{ include "civicrm-drupal.fullname" . }}-cron
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
     app.kubernetes.io/component: cron
@@ -13,10 +14,12 @@ spec:
   failedJobsHistoryLimit: {{ .Values.cronjob.failedJobsHistoryLimit }}
   jobTemplate:
     spec:
+      activeDeadlineSeconds: {{ .Values.cronjob.activeDeadlineSeconds }}
       template:
         metadata:
           labels:
-            {{- include "civicrm-drupal.selectorLabels" . | nindent 12 }}
+            app.kubernetes.io/name: {{ include "civicrm-drupal.name" . }}-cron
+            app.kubernetes.io/instance: {{ .Release.Name }}
             app.kubernetes.io/component: cron
         spec:
           restartPolicy: OnFailure
@@ -24,109 +27,75 @@ spec:
           imagePullSecrets:
             {{- toYaml . | nindent 12 }}
           {{- end }}
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          {{- with .Values.priorityClassName }}
+          priorityClassName: {{ . }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.podSecurityContext | nindent 12 }}
+          {{- if and .Values.cronjob.coLocate .Values.persistence.enabled }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - topologyKey: kubernetes.io/hostname
+                  labelSelector:
+                    matchLabels:
+                      {{- include "civicrm-drupal.selectorLabels" . | nindent 22 }}
+          {{- end }}
+          {{- if .Values.extensions }}
+          initContainers:
+            {{- include "civicrm-drupal.extensionsInitContainer" . | nindent 12 }}
+          {{- end }}
           containers:
             - name: cron
-              image: "{{ .Values.image.repository }}:{{ include "civicrm-drupal.imageTag" . }}"
+              image: {{ include "civicrm-drupal.image" . | quote }}
               imagePullPolicy: {{ .Values.image.pullPolicy }}
-              # Skip the full entrypoint bootstrap — only run the cron commands.
+              securityContext:
+                {{- toYaml .Values.securityContext | nindent 16 }}
+              # Bypass the web entrypoint: only the cron commands.
               command:
                 - sh
                 - -c
                 - |
                   set -e
-                  DRUPAL_ROOT=/opt/drupal
-                  DRUSH="${DRUPAL_ROOT}/vendor/bin/drush"
-                  CIVICRM_SETTINGS="${DRUPAL_ROOT}/web/sites/default/civicrm.settings.php"
+                  mkdir -p /tmp/civicrm/templates_c /tmp/drupal-php
+                  cd /opt/drupal/web
                   echo "Running Drupal cron..."
-                  "$DRUSH" --root="${DRUPAL_ROOT}/web" cron
-                  echo "Running CiviCRM cron..."
-                  cd "${DRUPAL_ROOT}/web" && CIVICRM_SETTINGS="${CIVICRM_SETTINGS}" cv cron
+                  drush --uri="$CIVICRM_BASE_URL" cron
+                  echo "Running CiviCRM scheduled jobs..."
+                  cv api job.execute
                   echo "Done."
               env:
-                # Database env vars are needed so Drupal/CiviCRM can bootstrap.
-                - name: DRUPAL_DB_HOST
-                  value: {{ include "civicrm-drupal.dbHost" . | quote }}
-                - name: DRUPAL_DB_PORT
-                  value: {{ .Values.app.drupalDb.port | quote }}
-                - name: DRUPAL_DB_NAME
-                  value: {{ .Values.app.drupalDb.name | quote }}
-                - name: DRUPAL_DB_USER
-                  value: {{ .Values.app.drupalDb.user | quote }}
-                - name: DRUPAL_DB_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                      key: drupal-db-password
-                - name: CIVICRM_DB_HOST
-                  value: {{ include "civicrm-drupal.civicrmDbHost" . | quote }}
-                - name: CIVICRM_DB_PORT
-                  value: {{ .Values.app.civicrmDb.port | quote }}
-                - name: CIVICRM_DB_NAME
-                  value: {{ .Values.app.civicrmDb.name | quote }}
-                - name: CIVICRM_DB_USER
-                  value: {{ include "civicrm-drupal.civicrmDbUser" . | quote }}
-                - name: CIVICRM_DB_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                      key: civicrm-db-password
-                - name: DRUPAL_BASE_URL
-                  value: {{ .Values.app.drupal.baseUrl | quote }}
-                - name: CIVICRM_SITE_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                      key: civicrm-site-key
-                      optional: true
-                - name: CIVICRM_CRED_KEYS
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                      key: civicrm-cred-keys
-                      optional: true
-                - name: CIVICRM_SIGN_KEYS
-                  valueFrom:
-                    secretKeyRef:
-                      name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                      key: civicrm-sign-keys
-                      optional: true
-                # Prevent the entrypoint from running install/update logic.
-                - name: AUTO_INSTALL
-                  value: "false"
-                - name: AUTO_UPDATE
-                  value: "false"
+                {{- include "civicrm-drupal.env" . | nindent 16 }}
               resources:
                 {{- toYaml .Values.cronjob.resources | nindent 16 }}
               volumeMounts:
-                - name: civicrm-settings
-                  mountPath: /opt/drupal/web/sites/default/settings.php
-                  subPath: settings.php
-                  readOnly: true
-                {{- if .Values.persistence.sites.enabled }}
-                - name: drupal-sites
-                  mountPath: /opt/drupal/web/sites/default/files
+                - name: tmp
+                  mountPath: /tmp
+                {{- include "civicrm-drupal.secretMount" . | nindent 16 }}
+                {{- if .Values.persistence.enabled }}
+                - name: data
+                  mountPath: /data
                 {{- end }}
-                {{- if .Values.persistence.private.enabled }}
-                - name: drupal-private
-                  mountPath: /opt/drupal/private
+                {{- if .Values.extensions }}
+                {{- include "civicrm-drupal.extensionsMount" . | nindent 16 }}
                 {{- end }}
-                - name: civicrm-settings
-                  mountPath: /opt/drupal/web/sites/default/civicrm.settings.php
-                  subPath: civicrm.settings.php
-                  readOnly: true
           volumes:
-            {{- if .Values.persistence.sites.enabled }}
-            - name: drupal-sites
+            - name: tmp
+              emptyDir:
+                medium: Memory
+                sizeLimit: {{ .Values.tmp.sizeLimit }}
+            {{- include "civicrm-drupal.secretVolume" . | nindent 12 }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
               persistentVolumeClaim:
-                claimName: {{ include "civicrm-drupal.fullname" . }}-sites
+                claimName: data-{{ include "civicrm-drupal.fullname" . }}-0
+            {{- else }}
+            - name: data
+              emptyDir: {}
             {{- end }}
-            {{- if .Values.persistence.private.enabled }}
-            - name: drupal-private
-              persistentVolumeClaim:
-                claimName: {{ include "civicrm-drupal.fullname" . }}-private
+            {{- if .Values.extensions }}
+            {{- include "civicrm-drupal.extensionsVolumes" . | nindent 12 }}
             {{- end }}
-            - name: civicrm-settings
-              configMap:
-                name: {{ include "civicrm-drupal.fullname" . }}-civicrm-settings
-                defaultMode: 0444
 {{- end }}

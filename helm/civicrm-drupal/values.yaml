@@ -1,10 +1,17 @@
+# Chart for the image built from build/civi-drupal-hardened.
+# The image is immutable: the root filesystem is read-only, only /tmp (memory) and /data (volume) are writable.
+# All configuration comes from environment variables; nothing secret is stored in the image or the chart.
+
 # -------------------------------------------------------------------
 # Image
 # -------------------------------------------------------------------
 image:
-  repository: ghcr.io/josaur/civicrm-docker-drupal
+  repository: ghcr.io/josaur/civicrm-docker-drupal-hardened
   tag: ""          # defaults to .Chart.AppVersion
-  pullPolicy: IfNotPresent
+  # Pin the exact build: sha256:... (takes precedence over the tag content, the tag stays for readability)
+  digest: ""
+  # Always is cheap with a digest and guarantees the node does not run a stale image
+  pullPolicy: Always
 
 imagePullSecrets: []
 
@@ -18,34 +25,56 @@ replicaCount: 1
 
 podAnnotations: {}
 podLabels: {}
-podSecurityContext: {}
-securityContext: {}
-resources: {}
+
+# Least privilege: unprivileged user above UID 10000, read-only root filesystem, no capabilities,
+# no privilege escalation, seccomp RuntimeDefault. The image runs with any UID; fsGroup makes the
+# data volume writable for it.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10033
+  runAsGroup: 10033
+  fsGroup: 10033
+  fsGroupChangePolicy: OnRootMismatch
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10033
+  runAsGroup: 10033
+  privileged: false
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+  seccompProfile:
+    type: RuntimeDefault
+
+# /tmp is an in-memory emptyDir (compiled templates, sessions, uploads in transit)
+tmp:
+  sizeLimit: 512Mi
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 512Mi
+  limits:
+    cpu: "2"
+    memory: 1Gi
 nodeSelector: {}
 tolerations: []
 affinity: {}
+topologySpreadConstraints: []
+priorityClassName: ""
 
-# Startup probe gates liveness/readiness until Apache is up.
-# periodSeconds * failureThreshold = maximum startup time allowed.
-# 10s * 60 = 10 minutes — enough for a cold Drupal + CiviCRM install.
+# The probes send the first app.trustedHosts entry as Host header: Drupal rejects unknown hosts.
+# Startup probe gates liveness/readiness. periodSeconds * failureThreshold = maximum startup time.
 startupProbe:
-  httpGet:
-    path: /
-    port: http
-  periodSeconds: 10
+  periodSeconds: 5
   failureThreshold: 60
-
 livenessProbe:
-  httpGet:
-    path: /
-    port: http
   periodSeconds: 30
   failureThreshold: 3
-
 readinessProbe:
-  httpGet:
-    path: /
-    port: http
   periodSeconds: 10
   failureThreshold: 3
 
@@ -63,7 +92,6 @@ ingress:
   enabled: false
   className: ""
   annotations: {}
-    # kubernetes.io/ingress.class: nginx
     # cert-manager.io/cluster-issuer: letsencrypt-prod
   host: civicrm.example.com
   tls: []
@@ -72,146 +100,124 @@ ingress:
   #      - civicrm.example.com
 
 # -------------------------------------------------------------------
-# Persistent storage
+# NetworkPolicy: default deny, then only what the application needs.
+# Only enforced if the CNI supports NetworkPolicy.
+# -------------------------------------------------------------------
+networkPolicy:
+  enabled: true
+  # Who may reach the application on its HTTP port (list of NetworkPolicyPeer).
+  # Empty: from every source. Recommended: the namespace of the ingress controller.
+  ingressFrom: []
+  #  - namespaceSelector:
+  #      matchLabels:
+  #        kubernetes.io/metadata.name: ingress-controller
+  # Where the application may connect to. Ports apply to any destination unless egressTo is set.
+  egressTo: []
+  egressPorts:
+    - {port: 53, protocol: UDP}     # DNS
+    - {port: 53, protocol: TCP}
+    - {port: 3306, protocol: TCP}   # database
+    - {port: 443, protocol: TCP}    # extension download, payment/API services
+    - {port: 587, protocol: TCP}    # SMTP submission
+    - {port: 465, protocol: TCP}    # SMTPS
+  # Additional raw egress rules
+  extraEgress: []
+
+# -------------------------------------------------------------------
+# Persistent storage: one volume mounted at /data
+# (public files, private files, CiviCRM uploads and l10n). Everything else is read-only or in memory.
 # -------------------------------------------------------------------
 persistence:
-  # Mounts sites/default/files/ — user uploads, CiviCRM files, Drupal cache.
-  # settings.php is written by the entrypoint; civicrm.settings.php is served
-  # from the ConfigMap. Neither needs to be on the PVC.
-  sites:
-    enabled: true
-    storageClass: ""
-    accessMode: ReadWriteOnce
-    size: 5Gi
-  private:
-    enabled: true
-    storageClass: ""
-    accessMode: ReadWriteOnce
-    size: 1Gi
+  enabled: true
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 5Gi
 
 # -------------------------------------------------------------------
 # Drupal / CiviCRM application
 # -------------------------------------------------------------------
 app:
-  # Behaviour flags
-  autoInstall: "true"
-  autoUpdate: "true"
-  # Comma-separated CiviCRM extension keys, e.g. "org.civicrm.search_kit"
-  civicrmExtensions: ""
+  # Public base URL, e.g. https://civicrm.example.com (required)
+  baseUrl: "http://civicrm.example.com"
+  # Host names Drupal answers to (required, the first one is used by the probes)
+  trustedHosts:
+    - civicrm.example.com
+  # IPs/CIDRs of the reverse proxy in front of the pod, comma separated
+  # (client IP and scheme are taken from X-Forwarded-*)
+  reverseProxyAddresses: ""
+  deployId: ""
 
-  # In-container cron (runs cron daemon inside the app pod).
-  # Leave empty to disable. Mutually exclusive with cronjob.enabled.
-  # Example: "*/15 * * * *"
-  cronSchedule: ""
-
-  # CiviCRM security keys — must stay stable across container restarts.
-  # On first install CiviCRM generates them automatically and writes them to
-  # civicrm.settings.php. Read them from there and set them here so they
-  # survive pod recreation without a persistent volume.
-  #
-  # Without these, CIVICRM_CRED_KEYS rotates on every restart and all
-  # stored encrypted values (SMTP passwords, API tokens, etc.) become unreadable.
-  # CIVICRM_SIGN_KEYS rotation invalidates all active JWT tokens and signed URLs.
-  #
-  # How to generate fresh keys (e.g. for a new installation):
-  #
-  #   CIVICRM_SITE_KEY:
-  #     Base64-alphanum encoded 32 random bytes (no padding, only [a-zA-Z0-9]).
-  #     php -r "echo preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(32))).PHP_EOL;"
-  #
-  #   CIVICRM_CRED_KEYS:
-  #     Prefix "aes-cbc:hkdf-sha256:" + base64-alphanum of 37 random bytes.
-  #     php -r "echo 'aes-cbc:hkdf-sha256:'.preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(37))).PHP_EOL;"
-  #
-  #   CIVICRM_SIGN_KEYS:
-  #     Prefix "jwt-hs256:hkdf-sha256:" + base64-alphanum of 40 random bytes.
-  #     php -r "echo 'jwt-hs256:hkdf-sha256:'.preg_replace('/[^a-zA-Z0-9]/','',base64_encode(random_bytes(40))).PHP_EOL;"
-  civicrmSiteKey: ""
-  civicrmCredKeys: ""
-  civicrmSignKeys: ""
-
-  drupal:
-    siteName: "CiviCRM"
-    # Must match ingress.host (or LoadBalancer IP) so CiviCRM links work
-    baseUrl: "http://civicrm.example.com"
-    admin:
-      user: admin
-      email: "admin@example.com"
-      # Use existingSecret instead of plaintext in production
-      password: "changeme"
-
-  # Drupal database — auto-points at the Bitnami sub-chart when mariadb.enabled=true
+  # Drupal database (external MariaDB/MySQL with utf8mb4)
   drupalDb:
-    # Leave host empty to use the in-chart MariaDB service name
-    host: ""
+    host: ""        # required
     port: 3306
     name: drupal
     user: drupal
-    # Use existingSecret instead of plaintext in production
-    password: "changeme"
 
-  # CiviCRM database — falls back to drupalDb values when left empty
+  # Optional separate CiviCRM database. Empty values fall back to drupalDb.
+  # The password comes from the secret key "civicrm-db-password" (falls back to "drupal-db-password").
   civicrmDb:
-    host: ""     # empty → same host as drupalDb
-    port: 3306
-    name: civicrm
-    user: ""     # empty → same user as drupalDb
-    password: "" # empty → same password as drupalDb
+    host: ""
+    port: ""
+    name: ""
+    user: ""
 
-  # Name of an existing Secret with keys:
-  #   drupal-admin-password, drupal-db-password, civicrm-db-password
-  # When set the plaintext password fields above are ignored.
+  # Name of an existing Secret (required). The chart never creates secrets.
+  # It is mounted read-only as files at /run/civi-secrets (not as environment variables). Keys:
+  #   drupal-db-password   password of app.drupalDb.user
+  #   drupal-hash-salt     openssl rand -hex 32
+  #   civicrm-site-key     openssl rand -hex 16
+  #   civicrm-cred-keys    aes-cbc:hkdf-sha256:<openssl rand -base64 32>
+  #                        Back this up: stored credentials (SMTP, payment processors) are encrypted with it.
+  #   civicrm-sign-keys    jwt-hs256:hkdf-sha256:<openssl rand -base64 32>
+  #   civicrm-db-password  optional, only with a separate CiviCRM database
   existingSecret: ""
 
+  # Additional environment variables (list of name/value or valueFrom entries)
+  extraEnv: []
+
 # -------------------------------------------------------------------
-# Kubernetes CronJob for Drupal + CiviCRM cron
-# Runs a short-lived pod on schedule instead of an in-container daemon.
-# Mutually exclusive with app.cronSchedule.
+# Kubernetes CronJob: Drupal cron and CiviCRM scheduled jobs (cv api job.execute)
 # -------------------------------------------------------------------
 cronjob:
   enabled: false
-  # Cron schedule in crontab format.
   schedule: "*/15 * * * *"
-  # Keep last N successful / failed job pods for inspection.
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 1
   # Prevent overlapping runs if a job takes longer than the interval.
   concurrencyPolicy: Forbid
-  resources: {}
+  activeDeadlineSeconds: 1500
+  # The volume is ReadWriteOnce: run the job on the node of the app pod
+  # (needed for node-local storage classes). Ignored without persistence.
+  coLocate: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: "1"
+      memory: 768Mi
 
 # -------------------------------------------------------------------
-# MariaDB sub-chart (Bitnami)
-# https://github.com/bitnami/charts/tree/main/bitnami/mariadb
-# Set mariadb.enabled=false to use an external database.
+# CiviCRM extensions
+# An init container downloads the listed extensions into an emptyDir that is mounted read-only
+# at web/sites/default/ext (the extensions directory of the image). Nothing is installed at runtime
+# and nothing is written into the data volume (PHP does not run there).
+# Every entry needs the extension key, an https URL of the release zip and the SHA-256 of that zip.
+# The key must match the key in the info.xml of the zip.
+# Downloading only places the files. Enable them once with: cv ext:enable <key>
 # -------------------------------------------------------------------
-mariadb:
-  enabled: true
+extensions: []
+  # - key: org.example.myextension
+  #   url: https://example.com/releases/org.example.myextension-1.0.0.zip
+  #   sha256: "0000000000000000000000000000000000000000000000000000000000000000"
 
-  image:
-    registry: docker.io
-    repository: bitnamilegacy/mariadb
-    tag: latest
-
-  global:
-    security:
-      allowInsecureImages: true
-
-  auth:
-    rootPassword: "rootchangeme"
-    database: drupal
-    username: drupal
-    # Must match app.drupalDb.password (or use existingSecret)
-    password: "changeme"
-    # existingSecret: ""
-
-  primary:
-    persistence:
-      enabled: true
-      storageClass: ""
-      size: 10Gi
-
-  initdbScripts:
-    init-civicrm.sql: |
-      CREATE DATABASE IF NOT EXISTS civicrm;
-      GRANT ALL PRIVILEGES ON civicrm.* TO 'drupal'@'%';
-      FLUSH PRIVILEGES;
+extensionsInit:
+  sizeLimit: 256Mi
+  resources:
+    requests:
+      cpu: 10m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi

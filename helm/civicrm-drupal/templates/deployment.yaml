@@ -2,12 +2,12 @@ apiVersion: apps/v1
 kind: StatefulSet
 metadata:
   name: {{ include "civicrm-drupal.fullname" . }}
+  namespace: {{ .Release.Namespace }}
   labels:
     {{- include "civicrm-drupal.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
-  # OrderedReady ensures each pod is Ready before the next starts.
-  # This prevents concurrent AUTO_INSTALL runs against the same database.
+  # OrderedReady: each pod is Ready before the next one starts.
   podManagementPolicy: OrderedReady
   serviceName: {{ include "civicrm-drupal.fullname" . }}-headless
   selector:
@@ -16,6 +16,9 @@ spec:
   template:
     metadata:
       annotations:
+        {{- if .Values.extensions }}
+        checksum/extensions: {{ include (print $.Template.BasePath "/configmap-extensions.yaml") . | sha256sum }}
+        {{- end }}
         {{- with .Values.podAnnotations }}
         {{- toYaml . | nindent 8 }}
         {{- end }}
@@ -29,128 +32,80 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      # The application does not talk to the Kubernetes API
+      automountServiceAccountToken: false
+      enableServiceLinks: false
+      {{- with .Values.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      {{- if .Values.extensions }}
+      initContainers:
+        {{- include "civicrm-drupal.extensionsInitContainer" . | nindent 8 }}
+      {{- end }}
       containers:
         - name: drupal
-          image: "{{ .Values.image.repository }}:{{ include "civicrm-drupal.imageTag" . }}"
+          image: {{ include "civicrm-drupal.image" . | quote }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.securityContext | nindent 12 }}
           ports:
             - name: http
-              containerPort: 80
+              containerPort: 8080
               protocol: TCP
           env:
-            # --- Drupal database ---
-            - name: DRUPAL_DB_HOST
-              value: {{ include "civicrm-drupal.dbHost" . | quote }}
-            - name: DRUPAL_DB_PORT
-              value: {{ .Values.app.drupalDb.port | quote }}
-            - name: DRUPAL_DB_NAME
-              value: {{ .Values.app.drupalDb.name | quote }}
-            - name: DRUPAL_DB_USER
-              value: {{ .Values.app.drupalDb.user | quote }}
-            - name: DRUPAL_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: drupal-db-password
-
-            # --- CiviCRM database ---
-            - name: CIVICRM_DB_HOST
-              value: {{ include "civicrm-drupal.civicrmDbHost" . | quote }}
-            - name: CIVICRM_DB_PORT
-              value: {{ .Values.app.civicrmDb.port | quote }}
-            - name: CIVICRM_DB_NAME
-              value: {{ .Values.app.civicrmDb.name | quote }}
-            - name: CIVICRM_DB_USER
-              value: {{ include "civicrm-drupal.civicrmDbUser" . | quote }}
-            - name: CIVICRM_DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: civicrm-db-password
-
-            # --- Drupal admin ---
-            - name: DRUPAL_ADMIN_USER
-              value: {{ .Values.app.drupal.admin.user | quote }}
-            - name: DRUPAL_ADMIN_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: drupal-admin-password
-            - name: DRUPAL_ADMIN_EMAIL
-              value: {{ .Values.app.drupal.admin.email | quote }}
-            - name: DRUPAL_SITE_NAME
-              value: {{ .Values.app.drupal.siteName | quote }}
-
-            # --- URLs ---
-            - name: DRUPAL_BASE_URL
-              value: {{ .Values.app.drupal.baseUrl | quote }}
-
-            # --- Behaviour ---
-            - name: AUTO_INSTALL
-              value: {{ .Values.app.autoInstall | quote }}
-            - name: AUTO_UPDATE
-              value: {{ .Values.app.autoUpdate | quote }}
-            - name: CIVICRM_EXTENSIONS
-              value: {{ .Values.app.civicrmExtensions | quote }}
-
-            # --- Cron ---
-            - name: CRON_SCHEDULE
-              value: {{ .Values.app.cronSchedule | quote }}
-
-            # --- CiviCRM security keys ---
-            - name: CIVICRM_SITE_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: civicrm-site-key
-                  optional: true
-            - name: CIVICRM_CRED_KEYS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: civicrm-cred-keys
-                  optional: true
-            - name: CIVICRM_SIGN_KEYS
-              valueFrom:
-                secretKeyRef:
-                  name: {{ .Values.app.existingSecret | default (printf "%s-app" (include "civicrm-drupal.fullname" .)) }}
-                  key: civicrm-sign-keys
-                  optional: true
-
+            {{- include "civicrm-drupal.env" . | nindent 12 }}
           startupProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ include "civicrm-drupal.probeHost" . | quote }}
             {{- toYaml .Values.startupProbe | nindent 12 }}
           livenessProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ include "civicrm-drupal.probeHost" . | quote }}
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
+            httpGet:
+              path: /
+              port: http
+              httpHeaders:
+                - name: Host
+                  value: {{ include "civicrm-drupal.probeHost" . | quote }}
             {{- toYaml .Values.readinessProbe | nindent 12 }}
-
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
-
           volumeMounts:
-            {{- if .Values.persistence.sites.enabled }}
-            - name: drupal-sites
-              mountPath: /opt/drupal/web/sites/default/files
+            - name: tmp
+              mountPath: /tmp
+            {{- include "civicrm-drupal.secretMount" . | nindent 12 }}
+            {{- if .Values.persistence.enabled }}
+            - name: data
+              mountPath: /data
             {{- end }}
-            {{- if .Values.persistence.private.enabled }}
-            - name: drupal-private
-              mountPath: /opt/drupal/private
+            {{- if .Values.extensions }}
+            {{- include "civicrm-drupal.extensionsMount" . | nindent 12 }}
             {{- end }}
-            - name: civicrm-settings
-              mountPath: /opt/drupal/web/sites/default/civicrm.settings.php
-              subPath: civicrm.settings.php
-              readOnly: true
-
       volumes:
-        - name: civicrm-settings
-          configMap:
-            name: {{ include "civicrm-drupal.fullname" . }}-civicrm-settings
-            defaultMode: 0444
-
+        - name: tmp
+          emptyDir:
+            medium: Memory
+            sizeLimit: {{ .Values.tmp.sizeLimit }}
+        {{- include "civicrm-drupal.secretVolume" . | nindent 8 }}
+        {{- if not .Values.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+        {{- if .Values.extensions }}
+        {{- include "civicrm-drupal.extensionsVolumes" . | nindent 8 }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}
@@ -159,37 +114,25 @@ spec:
       affinity:
         {{- toYaml . | nindent 8 }}
       {{- end }}
+      {{- with .Values.topologySpreadConstraints }}
+      topologySpreadConstraints:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       {{- with .Values.tolerations }}
       tolerations:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-
-  {{- if or .Values.persistence.sites.enabled .Values.persistence.private.enabled }}
+  {{- if .Values.persistence.enabled }}
   volumeClaimTemplates:
-    {{- if .Values.persistence.sites.enabled }}
     - metadata:
-        name: drupal-sites
+        name: data
       spec:
         accessModes:
-          - {{ .Values.persistence.sites.accessMode }}
-        {{- if .Values.persistence.sites.storageClass }}
-        storageClassName: {{ .Values.persistence.sites.storageClass }}
+          - {{ .Values.persistence.accessMode }}
+        {{- if .Values.persistence.storageClass }}
+        storageClassName: {{ .Values.persistence.storageClass }}
         {{- end }}
         resources:
           requests:
-            storage: {{ .Values.persistence.sites.size }}
-    {{- end }}
-    {{- if .Values.persistence.private.enabled }}
-    - metadata:
-        name: drupal-private
-      spec:
-        accessModes:
-          - {{ .Values.persistence.private.accessMode }}
-        {{- if .Values.persistence.private.storageClass }}
-        storageClassName: {{ .Values.persistence.private.storageClass }}
-        {{- end }}
-        resources:
-          requests:
-            storage: {{ .Values.persistence.private.size }}
-    {{- end }}
+            storage: {{ .Values.persistence.size }}
   {{- end }}
