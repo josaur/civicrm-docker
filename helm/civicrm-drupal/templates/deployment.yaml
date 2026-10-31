@@ -56,7 +56,7 @@ spec:
             {{- include "civicrm-drupal.env" . | nindent 12 }}
           startupProbe:
             httpGet:
-              path: /
+              path: {{ .Values.probePaths.startup }}
               port: http
               httpHeaders:
                 - name: Host
@@ -64,7 +64,7 @@ spec:
             {{- toYaml .Values.startupProbe | nindent 12 }}
           livenessProbe:
             httpGet:
-              path: /
+              path: {{ .Values.probePaths.liveness }}
               port: http
               httpHeaders:
                 - name: Host
@@ -72,7 +72,7 @@ spec:
             {{- toYaml .Values.livenessProbe | nindent 12 }}
           readinessProbe:
             httpGet:
-              path: /
+              path: {{ .Values.probePaths.readiness }}
               port: http
               httpHeaders:
                 - name: Host

@@ -2,7 +2,7 @@ apiVersion: v2
 name: civicrm-drupal
 description: CiviCRM on Drupal 11 (immutable, read-only root filesystem, non-root). Expects an external MariaDB and an existing Secret.
 type: application
-version: 0.3.0
+version: 0.3.1
 appVersion: "main"
 keywords:
   - civicrm

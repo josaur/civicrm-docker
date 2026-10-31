@@ -205,6 +205,15 @@ jobs:
           test -z "$(J '{.spec.containers[?(@.name=="drupal")].env[?(@.name=="DRUPAL_DB_PASSWORD")].name}')"
           test -z "$(J '{.spec.containers[?(@.name=="drupal")].env[?(@.name=="DRUPAL_HASH_SALT")].name}')"
 
+      - name: Probes do not depend on the front page
+        run: |
+          # The front page is a Drupal setting and may require a login; a probe on "/" would then restart the pod (seen in production)
+          for p in startupProbe livenessProbe readinessProbe; do
+            path="$(kubectl -n ${{ env.NAMESPACE }} get pod civi-civicrm-drupal-0 -o jsonpath="{.spec.containers[?(@.name=='drupal')].$p.httpGet.path}")"
+            echo "$p: $path"
+            test -n "$path" && test "$path" != "/"
+          done
+
       - name: Init container prepared the directories and the extension
         run: |
           kubectl -n ${{ env.NAMESPACE }} logs civi-civicrm-drupal-0 -c prepare | tee /dev/stderr | grep -q "1 extension(s) installed"

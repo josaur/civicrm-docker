@@ -76,6 +76,13 @@ topologySpreadConstraints: []
 priorityClassName: ""
 
 # The probes send the first app.trustedHosts entry as Host header: Drupal rejects unknown hosts.
+# Probe paths. They must answer 2xx/3xx for an anonymous visitor straight from the pod (not through any proxy). Never use "/":
+# the front page is a Drupal setting and may require a login (403), which makes the pod unready and restarts it.
+# /user/login needs PHP and the database (startup, readiness); /robots.txt is a static file (liveness: a database outage must not restart the pod).
+probePaths:
+  startup: /user/login
+  liveness: /robots.txt
+  readiness: /user/login
 # Startup probe gates liveness/readiness. periodSeconds * failureThreshold = maximum startup time.
 startupProbe:
   periodSeconds: 5
