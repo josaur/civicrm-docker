@@ -181,6 +181,7 @@ jobs:
 
       - name: Install chart (extension, CronJob, NetworkPolicy)
         run: |
+          printf '.crm-container { --ci-custom-css: 1; }\n' > /tmp/ci-custom.css
           helm install civi ${{ env.CHART }} -n ${{ env.NAMESPACE }} --wait --timeout 10m \
             --set image.repository=civi-drupal-runtime --set image.tag=ci --set image.pullPolicy=Never \
             --set toolsImage.repository=civi-drupal-tools --set toolsImage.tag=ci --set toolsImage.pullPolicy=Never \
@@ -190,6 +191,7 @@ jobs:
             --set 'extensions[0].key=${{ env.EXT_KEY }}' \
             --set 'extensions[0].url=${{ env.EXT_URL }}' \
             --set 'extensions[0].sha256=${{ env.EXT_SHA256 }}' \
+            --set customCss.enabled=true --set-file customCss.content=/tmp/ci-custom.css \
             --set cronjob.enabled=true --set 'cronjob.schedule=* * * * *'
           kubectl -n ${{ env.NAMESPACE }} get pods,networkpolicy
 
@@ -237,6 +239,9 @@ jobs:
           test "$(code /core/install.php)" = 403
           test "$(code /composer.json)" = 403
           test "$(code /sites/default/ext/${{ env.EXT_KEY }}/js/recentmenu.js)" = 200
+          # Custom CSS from the ConfigMap, served as a static file
+          test "$(code /sites/default/custom.css)" = 200
+          kubectl -n $NS exec web-test -- curl -s -H 'Host: localhost' "http://civi-civicrm-drupal.$NS.svc.cluster.local/sites/default/custom.css" | grep -q -- '--ci-custom-css'
 
       - name: CronJob runs
         run: |

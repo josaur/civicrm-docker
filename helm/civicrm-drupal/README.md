@@ -47,6 +47,20 @@ MariaDB** and an **existing Secret**. It never creates secrets and has no databa
    first, enable the `civicrm` module, delete the registrations of unavailable extensions and run `cv upgrade:db`.
    Run the commands through `/usr/local/bin/civi-entrypoint.sh <command>` in a one-off pod, so the data directories exist.
 
+## Custom CSS
+
+```yaml
+customCss:
+  enabled: true
+  existingConfigMap: my-css   # ConfigMap with the key "custom.css" (or: content: | ... , the chart creates the ConfigMap)
+```
+
+The file is mounted read-only at `web/sites/default/custom.css` and served as a static file. The chart does not change the CiviCRM
+settings: enter `https://<host>/sites/default/custom.css` once under *Administer > System Settings > Resource URLs > Custom CSS URL*
+(or `cv api4 Setting.set +v customCSSURL=...`). A mounted ConfigMap file is not updated in a running pod; inline `content` restarts the pod
+by itself (checksum), for `existingConfigMap` change a pod annotation. If you publish the host through a reverse proxy with a path
+allow list, allow this path for the public pages as well (CiviCRM forms load the CSS too).
+
 ## Extensions
 
 ```yaml

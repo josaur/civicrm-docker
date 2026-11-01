@@ -229,6 +229,21 @@ extraVolumeMounts: []
   #   readOnly: true
 
 # -------------------------------------------------------------------
+# Custom CSS (optional). The file is placed read-only below the document root and served by Apache as a static file. CiviCRM loads
+# it when its URL is entered once under Administer > System Settings > Resource URLs > Custom CSS URL (or with
+# `cv api4 Setting.set +v customCSSURL=<url>`); the chart does not touch the CiviCRM settings. Provide the CSS either inline
+# (`content`, the chart creates the ConfigMap) or as an existing ConfigMap (`existingConfigMap`, key `key`). A mounted ConfigMap file is
+# not updated in a running pod: restart it after a change (inline content does that by itself, a checksum annotation is set;
+# for `existingConfigMap` change a pod annotation). The URL is then <app.baseUrl>/sites/default/custom.css for the default mountPath.
+# -------------------------------------------------------------------
+customCss:
+  enabled: false
+  existingConfigMap: ""
+  content: ""
+  key: custom.css
+  mountPath: /opt/drupal/web/sites/default/custom.css
+
+# -------------------------------------------------------------------
 # CiviCRM extensions
 # An init container downloads the listed extensions into an emptyDir that is mounted read-only
 # at web/sites/default/ext (the extensions directory of the image). Nothing is installed at runtime

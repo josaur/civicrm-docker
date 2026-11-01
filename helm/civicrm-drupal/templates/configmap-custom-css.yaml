@@ -1,0 +1,15 @@
+{{- if and .Values.customCss.enabled (not .Values.customCss.existingConfigMap) }}
+{{- if not .Values.customCss.content }}
+{{- fail "customCss.enabled needs either customCss.content or customCss.existingConfigMap" }}
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}-custom-css
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+data:
+  {{ .Values.customCss.key }}: |
+    {{- .Values.customCss.content | nindent 4 }}
+{{- end }}
