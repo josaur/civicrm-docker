@@ -30,11 +30,15 @@ ARG CIVICRM_VERSION=6.19.2
 
 USER root
 
-# PHP extensions CiviCRM needs on top of the Drupal image
+# PHP extensions CiviCRM needs on top of the Drupal image. APCu: CiviCRM keeps settings and metadata caches in shared memory
+# (without it every request rebuilds them from the database; roughly twice the page time).
+ARG APCU_VERSION=5.1.28
 RUN apt-get update \
  && apt-get install -y --no-install-recommends libicu-dev libzip-dev unzip \
  && docker-php-ext-install -j"$(nproc)" intl bcmath mysqli \
- && rm -rf /var/lib/apt/lists/*
+ && pecl install "apcu-${APCU_VERSION}" \
+ && docker-php-ext-enable apcu \
+ && rm -rf /var/lib/apt/lists/* /tmp/pear
 
 WORKDIR /opt/drupal
 ENV COMPOSER_ALLOW_SUPERUSER=1

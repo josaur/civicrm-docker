@@ -1,0 +1,17 @@
+{{- if .Values.apache.enabled }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "civicrm-drupal.fullname" . }}-apache
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "civicrm-drupal.labels" . | nindent 4 }}
+data:
+  zz-tuning.conf: |
+    # Generated from values.apache. Loaded after the main configuration (IncludeOptional conf/*.conf).
+    KeepAlive {{ ternary "On" "Off" .Values.apache.keepAlive }}
+    {{- if .Values.apache.keepAlive }}
+    KeepAliveTimeout {{ .Values.apache.keepAliveTimeout | int }}
+    {{- end }}
+    MaxRequestWorkers {{ .Values.apache.maxRequestWorkers | int }}
+{{- end }}

@@ -19,6 +19,9 @@ spec:
         {{- if .Values.extensions }}
         checksum/extensions: {{ include (print $.Template.BasePath "/configmap-extensions.yaml") . | sha256sum }}
         {{- end }}
+        {{- if .Values.apache.enabled }}
+        checksum/apache: {{ include (print $.Template.BasePath "/configmap-apache.yaml") . | sha256sum }}
+        {{- end }}
         {{- if and .Values.customCss.enabled (not .Values.customCss.existingConfigMap) }}
         checksum/custom-css: {{ include (print $.Template.BasePath "/configmap-custom-css.yaml") . | sha256sum }}
         {{- end }}
@@ -94,6 +97,12 @@ spec:
             {{- if .Values.extensions }}
             {{- include "civicrm-drupal.extensionsMount" . | nindent 12 }}
             {{- end }}
+            {{- if .Values.apache.enabled }}
+            - name: apache-tuning
+              mountPath: /etc/apache2-civi/conf/zz-tuning.conf
+              subPath: zz-tuning.conf
+              readOnly: true
+            {{- end }}
             {{- if .Values.customCss.enabled }}
             - name: custom-css
               mountPath: {{ .Values.customCss.mountPath }}
@@ -115,6 +124,12 @@ spec:
         {{- end }}
         {{- if .Values.extensions }}
         {{- include "civicrm-drupal.extensionsVolumes" . | nindent 8 }}
+        {{- end }}
+        {{- if .Values.apache.enabled }}
+        - name: apache-tuning
+          configMap:
+            name: {{ include "civicrm-drupal.fullname" . }}-apache
+            defaultMode: 0444
         {{- end }}
         {{- if .Values.customCss.enabled }}
         - name: custom-css

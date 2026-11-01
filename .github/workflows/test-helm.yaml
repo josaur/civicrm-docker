@@ -239,6 +239,9 @@ jobs:
           test "$(code /core/install.php)" = 403
           test "$(code /composer.json)" = 403
           test "$(code /sites/default/ext/${{ env.EXT_KEY }}/js/recentmenu.js)" = 200
+          # APCu is loaded (tools image = same PHP build) and the Apache tuning from the chart is active
+          kubectl -n $NS exec web-test -- php -m | grep -q '^apcu$'
+          kubectl -n $NS get configmap civi-civicrm-drupal-apache -o jsonpath='{.data.zz-tuning\.conf}' | grep -q 'KeepAlive Off'
           # Custom CSS from the ConfigMap, served as a static file
           test "$(code /sites/default/custom.css)" = 200
           kubectl -n $NS exec web-test -- curl -s -H 'Host: localhost' "http://civi-civicrm-drupal.$NS.svc.cluster.local/sites/default/custom.css" | grep -q -- '--ci-custom-css'

@@ -47,6 +47,14 @@ MariaDB** and an **existing Secret**. It never creates secrets and has no databa
    first, enable the `civicrm` module, delete the registrations of unavailable extensions and run `cv upgrade:db`.
    Run the commands through `/usr/local/bin/civi-entrypoint.sh <command>` in a one-off pod, so the data directories exist.
 
+## Apache tuning and APCu
+
+The image includes APCu (shared memory cache of CiviCRM, about halves the page time). It is not shared with CLI tools: after
+settings or schema changes made with `cv`/`drush` in a one-off job, restart the web pod so it does not serve stale cached values.
+
+`apache.*` (enabled by default) switches keep-alive off and sets `MaxRequestWorkers`. Behind a reverse proxy that keeps idle
+connections open, the default prefork setup (10 workers, 5 s keep-alive) makes requests wait in multiples of 5 s.
+
 ## Custom CSS
 
 ```yaml

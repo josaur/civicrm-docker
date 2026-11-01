@@ -229,6 +229,18 @@ extraVolumeMounts: []
   #   readOnly: true
 
 # -------------------------------------------------------------------
+# Apache tuning. Apache runs in prefork mode (mod_php): every connection occupies one worker. A reverse proxy that keeps idle
+# connections open (Traefik, nginx) would block the few workers for KeepAliveTimeout seconds and new requests would wait in
+# multiples of that time (seen in production: small static files took 5/10/15/20 s). Without keep-alive a worker is only busy while a
+# request runs. Each PHP request may use up to PHP memory_limit (512M), so keep maxRequestWorkers within the container memory limit.
+# -------------------------------------------------------------------
+apache:
+  enabled: true
+  keepAlive: false
+  keepAliveTimeout: 2        # only used with keepAlive: true
+  maxRequestWorkers: 16
+
+# -------------------------------------------------------------------
 # Custom CSS (optional). The file is placed read-only below the document root and served by Apache as a static file. CiviCRM loads
 # it when its URL is entered once under Administer > System Settings > Resource URLs > Custom CSS URL (or with
 # `cv api4 Setting.set +v customCSSURL=<url>`); the chart does not touch the CiviCRM settings. Provide the CSS either inline
